@@ -27,7 +27,7 @@ python build.py install
 #### Example
 ```bash
 cd dib-render/
-python example.py --texture_use --texture texture.png
+python simple_example.py --use_texture
 ```
 
 #### Inference

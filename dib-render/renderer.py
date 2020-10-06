@@ -1,20 +1,11 @@
 from __future__ import print_function
 from __future__ import division
-
-import torch
-import torch.nn as nn
-
 import sys
 sys.path.append('../utils/')
 sys.path.append('./render_cuda')
 
-import numpy as np
-import torch
-import torch.nn as nn
-
 sys.path.append('../utils/render')
 # from renderfunc_cluster import rendermeshcolor as rendermesh
-from render_cuda.utils_render_color2 import linear
 
 # renderers = {
 #     'VertexColor': VCRender,
@@ -22,6 +13,13 @@ from render_cuda.utils_render_color2 import linear
 #     'SphericalHarmonics': SHRender,
 #     'Phong': PhongRender
 # }
+
+from render_cuda.utils_render_color2 import linear
+from render_cuda.rasterizer import linear_rasterizer
+import numpy as np
+
+import torch
+import torch.nn as nn
 
 
 def perspective_projection(points_bxpx3, faces_fx3, cameras):
@@ -217,56 +215,56 @@ def fragmentshader(imtexcoord_bxhxwx2,
 
 
 # Phong
-# def fragmentshader(
-#     imnormal1_bxhxwx3,
-#     lightdirect1_bx3,
-#     eyedirect1_bxhxwx3,
-#     material_bx3x3,
-#     shininess_bx1,
-#     imtexcoord_bxhxwx2,
-#     texture_bx3xthxtw,
-#     improb_bxhxwx1,
-# ):
-#     # parallel light
-#     lightdirect1_bx1x1x3 = lightdirect1_bx3.view(-1, 1, 1, 3)
+def phong_fragmentshader(
+    imnormal1_bxhxwx3,
+    lightdirect1_bx3,
+    eyedirect1_bxhxwx3,
+    material_bx3x3,
+    shininess_bx1,
+    imtexcoord_bxhxwx2,
+    texture_bx3xthxtw,
+    improb_bxhxwx1,
+):
+    # parallel light
+    lightdirect1_bx1x1x3 = lightdirect1_bx3.view(-1, 1, 1, 3)
 
-#     # lambertian
-#     cosTheta_bxhxwx1 = torch.sum(imnormal1_bxhxwx3 * lightdirect1_bx1x1x3,
-#                                  dim=3,
-#                                  keepdim=True)
-#     cosTheta_bxhxwx1 = torch.clamp(cosTheta_bxhxwx1, 0, 1)
+    # lambertian
+    cosTheta_bxhxwx1 = torch.sum(imnormal1_bxhxwx3 * lightdirect1_bx1x1x3,
+                                 dim=3,
+                                 keepdim=True)
+    cosTheta_bxhxwx1 = torch.clamp(cosTheta_bxhxwx1, 0, 1)
 
-#     # specular
-#     reflect = -lightdirect1_bx1x1x3 + 2 * cosTheta_bxhxwx1 * imnormal1_bxhxwx3
-#     import pdb
-#     pdb.set_trace()
-#     cosAlpha_bxhxwx1 = torch.sum(reflect * eyedirect1_bxhxwx3,
-#                                  dim=3,
-#                                  keepdim=True)
-#     cosAlpha_bxhxwx1 = torch.clamp(cosAlpha_bxhxwx1, 1e-5,
-#                                    1)  # should not be 0 since nan error
-#     cosAlpha_bxhxwx1 = torch.pow(cosAlpha_bxhxwx1,
-#                                  shininess_bx1.view(
-#                                      -1, 1, 1,
-#                                      1))  # shininess should be large than 0
+    # specular
+    reflect = -lightdirect1_bx1x1x3 + 2 * cosTheta_bxhxwx1 * imnormal1_bxhxwx3
+    import pdb
+    # pdb.set_trace()
+    cosAlpha_bxhxwx1 = torch.sum(reflect * eyedirect1_bxhxwx3,
+                                 dim=3,
+                                 keepdim=True)
+    cosAlpha_bxhxwx1 = torch.clamp(cosAlpha_bxhxwx1, 1e-5,
+                                   1)  # should not be 0 since nan error
+    cosAlpha_bxhxwx1 = torch.pow(cosAlpha_bxhxwx1,
+                                 shininess_bx1.view(
+                                     -1, 1, 1,
+                                     1))  # shininess should be large than 0
 
-#     # simplified model
-#     # light color is [1, 1, 1]
-#     MatAmbColor_bx1x1x3 = material_bx3x3[:, 0:1, :].view(-1, 1, 1, 3)
-#     MatDifColor_bxhxwx3 = material_bx3x3[:, 1:2, :].view(-1, 1, 1,
-#                                                          3) * cosTheta_bxhxwx1
-#     MatSpeColor_bxhxwx3 = material_bx3x3[:, 2:3, :].view(-1, 1, 1,
-#                                                          3) * cosAlpha_bxhxwx1
+    # simplified model
+    # light color is [1, 1, 1]
+    MatAmbColor_bx1x1x3 = material_bx3x3[:, 0:1, :].view(-1, 1, 1, 3)
+    MatDifColor_bxhxwx3 = material_bx3x3[:, 1:2, :].view(-1, 1, 1,
+                                                         3) * cosTheta_bxhxwx1
+    MatSpeColor_bxhxwx3 = material_bx3x3[:, 2:3, :].view(-1, 1, 1,
+                                                         3) * cosAlpha_bxhxwx1
 
-#     # tex color
-#     texcolor_bxhxwx3 = texinterpolation(imtexcoord_bxhxwx2, texture_bx3xthxtw)
+    # tex color
+    texcolor_bxhxwx3 = texinterpolation(imtexcoord_bxhxwx2, texture_bx3xthxtw)
 
-#     # ambient and diffuse rely on object color while specular doesn't
-#     color = (MatAmbColor_bx1x1x3 +
-#              MatDifColor_bxhxwx3) * texcolor_bxhxwx3 + MatSpeColor_bxhxwx3
-#     color = color * improb_bxhxwx1
+    # ambient and diffuse rely on object color while specular doesn't
+    color = (MatAmbColor_bx1x1x3 +
+             MatDifColor_bxhxwx3) * texcolor_bxhxwx3 + MatSpeColor_bxhxwx3
+    color = color * improb_bxhxwx1
 
-#     return torch.clamp(color, 0, 1)
+    return torch.clamp(color, 0, 1)
 
 
 class TexRender(nn.Module):
@@ -316,14 +314,14 @@ class TexRender(nn.Module):
         uv_bxfx9 = torch.cat((c0, mask, c1, mask, c2, mask), dim=2)
         # uv_bxfx9 = torch.cat((c0, c1, c2), dim=2)
 
-        # imfeat, improb_bxhxwx1 = linear_rasterizer(self.height, self.width,
-        #                                            points3d_bxfx9,
-        #                                            points2d_bxfx6,
-        #                                            normalz_bxfx1, uv_bxfx9)
+        imfeat, improb_bxhxwx1 = linear_rasterizer(self.height, self.width,
+                                                   points3d_bxfx9,
+                                                   points2d_bxfx6,
+                                                   normalz_bxfx1, uv_bxfx9)
         import pdb
         # pdb.set_trace()
-        imfeat, improb_bxhxwx1 = linear(points3d_bxfx9, points2d_bxfx6,
-                                        normalz_bxfx1, uv_bxfx9)
+        # imfeat, improb_bxhxwx1 = linear(points3d_bxfx9, points2d_bxfx6,
+        #                                 normalz_bxfx1, uv_bxfx9)
 
         imtexcoords = imfeat[:, :, :, :2]
         hardmask = imfeat[:, :, :, 2:3]
@@ -419,18 +417,27 @@ class PhongRender(nn.Module):
         eyedirect_bxfx9 = -points3d_bxfx9
         eyedirect_bxfx3x3 = eyedirect_bxfx9.view(-1, fnum, 3, 3)
 
-        #TODO(taku): shoulf solve that!!!
+        # TODO(taku): shoulf solve that!!!
         # feat = torch.cat((normal_bxfx3x3, eyedirect_bxfx3x3, uv_bxfx3x3),
         #                  dim=3)
         # feat = uv_bxfx3x3
-        feat = eyedirect_bxfx3x3
 
+        # feat = eyedirect_bxfx3x3
+
+        feat = torch.cat((normal_bxfx3x3, eyedirect_bxfx3x3, uv_bxfx3x3),
+                         dim=3)
         feat = feat.view(bnum, fnum, -1)
         import pdb
 
-        imfeature, improb_bxhxwx1 = linear(points3d_bxfx9, points2d_bxfx6,
-                                           normalz_bxfx1, feat)
-        pdb.set_trace()
+        # imfeature, improb_bxhxwx1 = linear(points3d_bxfx9, points2d_bxfx6,
+        #                                    normalz_bxfx1, feat)
+
+        imfeature, improb_bxhxwx1 = linear_rasterizer(self.height, self.width,
+                                                      points3d_bxfx9,
+                                                      points2d_bxfx6,
+                                                      normalz_bxfx1, feat)
+
+        # pdb.set_trace()
         ##################################################################
         imnormal = imfeature[:, :, :, :3]
         imeye = imfeature[:, :, :, 3:6]
@@ -441,10 +448,12 @@ class PhongRender(nn.Module):
         imnormal1 = datanormalize(imnormal, axis=3)
         lightdirect_bx3 = datanormalize(lightdirect_bx3, axis=1)
         imeye1 = datanormalize(imeye, axis=3)
+        import pdb
+        # pdb.set_trace()
 
-        imrender = fragmentshader(imnormal1, lightdirect_bx3, imeye1,
-                                  material_bx3x3, shininess_bx1, imtexcoords,
-                                  texture_bx3xthxtw, immask)
+        imrender = phong_fragmentshader(imnormal1, lightdirect_bx3, imeye1,
+                                        material_bx3x3, shininess_bx1,
+                                        imtexcoords, texture_bx3xthxtw, immask)
 
         return imrender, improb_bxhxwx1, normal1_bxfx3
 
