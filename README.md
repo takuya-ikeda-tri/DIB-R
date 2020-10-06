@@ -24,6 +24,10 @@ cd dib-render/cuda_dib_render
 python build.py install
 ```
 
+#### Example
+```bash
+python example.py --texture_use --texture texture.png
+```
 
 #### Inference
 ``` bash
