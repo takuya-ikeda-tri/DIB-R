@@ -42,6 +42,21 @@ MESH_SIZE = 5
 HEIGHT = 512
 WIDTH = 512
 
+# def get_spherical_coords_z(X):
+# def get_spherical_coords_x(X):
+#     # X is N x 3
+#     rad = np.linalg.norm(X, axis=1)
+#     # Inclination
+#     theta = np.arccos(X[:, 2] / rad)
+#     # Azimuth
+#     phi = np.arctan2(X[:, 1], X[:, 0])
+
+#     # Normalize both to be between [-1, 1]
+#     vv = (theta / np.pi) * 2 - 1
+#     uu = ((phi + np.pi) / (2 * np.pi)) * 2 - 1
+#     # Return N x 2
+#     return np.stack([uu, vv], 1)
+
 
 # symmetric over x axis
 def get_spherical_coords_x(X):
@@ -88,7 +103,11 @@ def main():
     ###########################
     # pointnp_px3, facenp_fx3 = loadobj('sphere.obj')
     # pointnp_px3 /= 3.0
-    pointnp_px3, facenp_fx3 = loadobj('banana.obj')
+    # pointnp_px3, facenp_fx3 = loadobj('banana.obj')
+    pointnp_px3, facenp_fx3 = loadobj('obj_000001.obj')
+    pointnp_px3 = pointnp_px3[:, [1, 2, 0]]
+    # import pdb
+    # pdb.set_trace()
     vertices = torch.from_numpy(pointnp_px3).to(device)
     faces = torch.from_numpy(facenp_fx3).to(device)
 

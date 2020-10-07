@@ -104,11 +104,59 @@ def compute_camera_params(azimuth: float, elevation: float, distance: float):
     axisY = np.cross(axisZ, axisX)
 
     cam_mat = np.array([axisX, axisY, axisZ])
+    import pdb
+    pdb.set_trace()
     l2 = np.atleast_1d(np.linalg.norm(cam_mat, 2, 1))
     l2[l2 == 0] = 1
     cam_mat = cam_mat / np.expand_dims(l2, 1)
 
     return torch.FloatTensor(cam_mat), torch.FloatTensor(cam_pos)
+
+
+def compute_camera_params_torch(azimuth, elevation, distance):
+    # theta = torch.deg2rad(azimuth)
+    # phi = torch.deg2rad(elevation)
+    theta = azimuth * np.pi / 180.0
+    phi = elevation * np.pi / 180.0
+
+    camY = distance * torch.sin(phi)
+    temp = distance * torch.cos(phi)
+    camX = temp * torch.cos(theta)
+    camZ = temp * torch.sin(theta)
+    cam_pos = torch.tensor([camX, camY, camZ])
+    # array([7.87187789e-17, 1.53208889e+00, 1.28557522e+00])
+
+    axisZ = cam_pos
+    axisY = torch.tensor([0.0, 1.0, 0.0])
+    axisX = torch.cross(axisY, axisZ)
+    axisY = torch.cross(axisZ, axisX)
+    cam_mat = torch.stack([axisX, axisY, axisZ])
+    # array([[ 1.28557522e+00,  0.00000000e+00, -7.87187789e-17],
+    #     [-1.20604166e-16,  1.65270364e+00, -1.96961551e+00],
+    #     [ 7.87187789e-17,  1.53208889e+00,  1.28557522e+00]])
+    l2 = torch.norm(cam_mat, 2, 1)
+    l2[l2 == 0] = 1
+    # array([1.28557522, 2.57115044, 2.        ])
+    cam_mat = cam_mat / l2.unsqueeze(1)
+    # array([[ 1.00000000e+00,  0.00000000e+00, -6.12323400e-17],
+    #    [-4.69066938e-17,  6.42787610e-01, -7.66044443e-01],
+    #    [ 3.93593894e-17,  7.66044443e-01,  6.42787610e-01]])
+
+    return cam_mat, cam_pos
+
+    # axisZ = cam_pos.copy()
+    # axisY = np.array([0, 1, 0])
+    # axisX = np.cross(axisY, axisZ)
+    # axisY = np.cross(axisZ, axisX)
+    # cam_mat = np.array([axisX, axisY, axisZ])
+
+    # import pdb
+    # pdb.set_trace()
+    # l2 = np.atleast_1d(np.linalg.norm(cam_mat, 2, 1))
+    # l2[l2 == 0] = 1
+    # cam_mat = cam_mat / np.expand_dims(l2, 1)
+
+    # return torch.FloatTensor(cam_mat), torch.FloatTensor(cam_pos)
 
 
 ##################################################################
@@ -488,18 +536,51 @@ class Renderer(nn.Module):
             self.camera_fov_y = 49.13434207744484 * np.pi / 180.0
         self.camera_params = None
 
-    def forward(self, points, *args, **kwargs):
+    # def forward(self, points, *args, **kwargs):
 
-        if self.camera_params is None:
+    #     if self.camera_params is None:
+    #         print(
+    #             'Camera parameters have not been set, default perspective parameters of distance = 1, elevation = 30, azimuth = 0 are being used'
+    #         )
+    #         self.set_look_at_parameters([0], [30], [1])
+
+    #     assert self.camera_params[0].shape[0] == points[0].shape[
+    #         0], "Set camera parameters batch size must equal batch size of passed points"
+
+    #     return self.renderer(points, self.camera_params, *args, **kwargs)
+
+    def forward(self, points, camera_params, *args, **kwargs):
+
+        if camera_params is None:
             print(
                 'Camera parameters have not been set, default perspective parameters of distance = 1, elevation = 30, azimuth = 0 are being used'
             )
             self.set_look_at_parameters([0], [30], [1])
 
-        assert self.camera_params[0].shape[0] == points[0].shape[
+        assert camera_params[0].shape[0] == points[0].shape[
             0], "Set camera parameters batch size must equal batch size of passed points"
 
-        return self.renderer(points, self.camera_params, *args, **kwargs)
+        return self.renderer(points, camera_params, *args, **kwargs)
+
+    # def set_look_at_parameters(self, azimuth, elevation, distance):
+
+    #     camera_projection_mtx = perspectiveprojectionnp(self.camera_fov_y, 1.0)
+    #     camera_projection_mtx = torch.FloatTensor(camera_projection_mtx).cuda()
+
+    #     camera_view_mtx = []
+    #     camera_view_shift = []
+    #     for a, e, d in zip(azimuth, elevation, distance):
+    #         mat, pos = compute_camera_params(a, e, d)
+    #         camera_view_mtx.append(mat)
+    #         camera_view_shift.append(pos)
+    #     camera_view_mtx = torch.stack(camera_view_mtx).cuda()
+    #     camera_view_shift = torch.stack(camera_view_shift).cuda()
+
+    #     # import pdb
+    #     # pdb.set_trace()
+    #     self.camera_params = [
+    #         camera_view_mtx, camera_view_shift, camera_projection_mtx
+    #     ]
 
     def set_look_at_parameters(self, azimuth, elevation, distance):
 
@@ -509,7 +590,34 @@ class Renderer(nn.Module):
         camera_view_mtx = []
         camera_view_shift = []
         for a, e, d in zip(azimuth, elevation, distance):
-            mat, pos = compute_camera_params(a, e, d)
+            mat, pos = compute_camera_params_torch(a, e, d)
+            camera_view_mtx.append(mat)
+            camera_view_shift.append(pos)
+
+        # import pdb
+        # pdb.set_trace()
+
+        camera_view_mtx = torch.stack(camera_view_mtx).cuda()
+        camera_view_shift = torch.stack(camera_view_shift).cuda()
+
+        self.camera_params = [
+            camera_view_mtx, camera_view_shift, camera_projection_mtx
+        ]
+        return [camera_view_mtx, camera_view_shift, camera_projection_mtx]
+
+    def calc_look_at_parameters(self, azimuth, elevation, distance, device):
+
+        camera_projection_mtx = perspectiveprojectionnp(self.camera_fov_y, 1.0)
+        camera_projection_mtx = torch.FloatTensor(camera_projection_mtx).cuda()
+
+        mat, pos = compute_camera_params_torch(azimuth, elevation, distance)
+        return mat.to(device)[None], pos.to(
+            device)[None], camera_projection_mtx
+
+        camera_view_mtx = []
+        camera_view_shift = []
+        for a, e, d in zip(azimuth, elevation, distance):
+            mat, pos = compute_camera_params_torch(a, e, d)
             camera_view_mtx.append(mat)
             camera_view_shift.append(pos)
         camera_view_mtx = torch.stack(camera_view_mtx).cuda()
@@ -518,6 +626,7 @@ class Renderer(nn.Module):
         self.camera_params = [
             camera_view_mtx, camera_view_shift, camera_projection_mtx
         ]
+        return [camera_view_mtx, camera_view_shift, camera_projection_mtx]
 
     def set_camera_parameters(self, parameters):
         self.camera_params = parameters
