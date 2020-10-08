@@ -24,11 +24,19 @@ cd dib-render/cuda_dib_render
 python build.py install
 ```
 
-#### Example
+#### Example1
 ```bash
 cd dib-render/
 python simple_example.py --use_texture
 ```
+
+#### Example2
+camera pose optimization
+```bash
+cd dib-render/
+python3 simple_train_cam_pos_optim.py --use_texture --texture real_tea_bottle.png
+```
+
 
 #### Inference
 ``` bash
