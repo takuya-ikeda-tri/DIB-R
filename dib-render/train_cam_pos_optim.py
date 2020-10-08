@@ -36,8 +36,8 @@ ROOT_DIR = os.path.abspath(os.path.dirname(__file__))
 # Settings
 ###########################
 MESH_SIZE = 5
-HEIGHT = 512
-WIDTH = 512
+HEIGHT = 512  # 256
+WIDTH = 512  # 256
 
 import torch.nn.functional as F
 
@@ -377,28 +377,35 @@ def main():
     #     lightdirect_bx3=tflight_bx3.cuda(),
     #     material_bx3x3=tfmat.cuda(),
     #     shininess_bx1=tfshi.cuda())
-    predictions_ref, silhouete_ref, _ = renderer(
-        points=[vertices, faces.long()],
-        camera_params=camera_params,
-        uv_bxpx2=uv,
-        texture_bx3xthxtw=texture,
-        lightdirect_bx3=tflight_bx3.cuda(),
-        material_bx3x3=tfmat.cuda(),
-        shininess_bx1=tfshi.cuda())
+
+    if args.use_texture:
+        predictions_ref, silhouete_ref, _ = renderer(
+            points=[vertices, faces.long()],
+            camera_params=camera_params,
+            uv_bxpx2=uv,
+            texture_bx3xthxtw=texture,
+            lightdirect_bx3=tflight_bx3.cuda(),
+            material_bx3x3=tfmat.cuda(),
+            shininess_bx1=tfshi.cuda())
+    else:
+        predictions_ref, silhouete_ref, _ = renderer(
+            points=[vertices, faces.long()],
+            camera_params=camera_params,
+            colors_bxpx3=colors)
 
     silhouete_np = silhouete_ref.cpu().numpy()[0]
     predictions_np = predictions_ref.cpu().numpy()[0]
 
-    # import matplotlib.pyplot as plt
-    # plt.figure(figsize=(10, 10))
-    # plt.subplot(1, 2, 1)
-    # plt.imshow(
-    #     silhouete_np[..., 0])  # only plot the alpha channel of the RGBA image
-    # plt.grid(False)
-    # plt.subplot(1, 2, 2)
-    # plt.imshow(predictions_np)
-    # plt.grid(False)
-    # plt.show()
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(10, 10))
+    plt.subplot(1, 2, 1)
+    plt.imshow(
+        silhouete_np[..., 0])  # only plot the alpha channel of the RGBA image
+    plt.grid(False)
+    plt.subplot(1, 2, 2)
+    plt.imshow(predictions_np)
+    plt.grid(False)
+    plt.show()
 
     import torch.nn as nn
     from torch.autograd import Variable
@@ -407,16 +414,17 @@ def main():
     writer = imageio.get_writer(filename_output, mode='I', duration=0.3)
 
     class Model(nn.Module):
-        def __init__(self, renderer, image_ref, device, verticesc, facesc, uvc,
-                     texturec, tflight_bx3c, tfmatc, tfshic):
+        def __init__(self, renderer, image_ref, sil_ref, device, verticesc,
+                     facesc, uvc, texturec, tflight_bx3c, tfmatc, tfshic):
             super().__init__()
             self.renderer = renderer
 
             # Get the silhouette of the reference RGB image by finding all non-white pixel values.
             self.register_buffer('image_ref', image_ref)
+            self.register_buffer('sil_ref', sil_ref)
 
             self.camera_position_plane = nn.Parameter(
-                torch.from_numpy(np.array([30.0, 60.0, 6.0],
+                torch.from_numpy(np.array([30.0, 60.0, 5.0],
                                           dtype=np.float32)).to(device))
 
             # Create an optimizable parameter for the x, y, z position of the camera.
@@ -484,45 +492,59 @@ def main():
             # pdb.set_trace()
             # camera_params = [R, T, camera_mtx]
 
-            predictions, silhouette, _ = self.renderer(
-                points=[self.vertices, self.faces.long()],
-                camera_params=camera_params,
-                uv_bxpx2=self.uv,
-                texture_bx3xthxtw=self.texture,
-                lightdirect_bx3=self.tflight_bx3.cuda(),
-                material_bx3x3=self.tfmat.cuda(),
-                shininess_bx1=self.tfshi.cuda())
+            if args.use_texture:
+                predictions, silhouette, _ = self.renderer(
+                    points=[self.vertices, self.faces.long()],
+                    camera_params=camera_params,
+                    uv_bxpx2=self.uv,
+                    texture_bx3xthxtw=self.texture,
+                    lightdirect_bx3=self.tflight_bx3.cuda(),
+                    material_bx3x3=self.tfmat.cuda(),
+                    shininess_bx1=self.tfshi.cuda())
+            else:
+                predictions, silhouette, _ = self.renderer(
+                    points=[vertices, faces.long()],
+                    camera_params=camera_params,
+                    colors_bxpx3=colors)
 
             # Calculate the silhouette loss
-            # loss = torch.sum((predictions - self.image_ref)**2)
-            loss = torch.sum((silhouette - self.image_ref)**2)
+            # loss = ((predictions - self.image_ref)**2).mean()
+            # loss = 0.3 * torch.sum((predictions - self.image_ref)**2)
+            loss = torch.sum((predictions - self.image_ref)**2)
+            loss += torch.sum((silhouette - self.sil_ref)**2)
+            # loss = torch.sum((silhouette - self.sil_ref)**2)
+            # loss = 0.05 * torch.sum((predictions - self.image_ref)**2)
             # import pdb
             # pdb.set_trace()
             # loss = ((predictions - self.image_ref)**2).mean()
             # loss = Variable(loss, requires_grad=True)
             return loss, predictions, silhouette
 
-    # model = Model(renderer, predictions_ref, device, vertices, faces, uv,
+    if not args.use_texture:
+        uv, texture = None, None
+    model = Model(renderer, predictions_ref, silhouete_ref, device, vertices,
+                  faces, uv, texture, tflight_bx3, tfmat, tfshi).to(device)
+    # model = Model(renderer, silhouete_ref, device, vertices, faces, uv,
     #               texture, tflight_bx3, tfmat, tfshi).to(device)
-    model = Model(renderer, silhouete_ref, device, vertices, faces, uv,
-                  texture, tflight_bx3, tfmat, tfshi).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=0.05)
 
-    # _, image_init, silhouette_init = model()
-    # plt.subplot(1, 2, 1)
-    # # plt.imshow(image_init.detach().squeeze().cpu().numpy())
+    _, image_init, silhouette_init = model()
+    plt.subplot(1, 2, 1)
+    plt.imshow(image_init.detach().squeeze().cpu().numpy())
     # plt.imshow(silhouette_init.detach().squeeze().cpu().numpy())
-    # plt.grid(False)
-    # plt.title("Starting position")
+    plt.grid(False)
+    plt.title("Starting position")
 
-    # plt.subplot(1, 2, 2)
-    # plt.imshow(model.image_ref.cpu().numpy().squeeze())
-    # plt.grid(False)
-    # plt.title("Reference silhouette")
-    # plt.show()
+    plt.subplot(1, 2, 2)
+    plt.imshow(model.image_ref.cpu().numpy().squeeze())
+    # plt.imshow(model.sil_ref.cpu().numpy().squeeze())
+    plt.grid(False)
+    plt.title("Reference Image")
+    plt.show()
 
-    loop = tqdm.tqdm(range(400))
+    # loop = tqdm.tqdm(range(500))
+    loop = tqdm.tqdm(range(2000))
     for i in loop:
         with torch.autograd.set_detect_anomaly(True):
             optimizer.zero_grad()
@@ -537,8 +559,8 @@ def main():
 
             loop.set_description('Optimizing (loss %.4f)' % loss.data)
             print(loss)
-            if loss.item() < 200:
-                break
+            # if loss.item() < 200:
+            #     break
 
         if i % 10 == 0:
             image = pre_img[0].detach().cpu().numpy()

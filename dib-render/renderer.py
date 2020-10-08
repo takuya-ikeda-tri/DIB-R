@@ -64,7 +64,8 @@ eps = 1e-15
 
 
 def datanormalize(data, axis):
-    datalen = torch.sqrt(torch.sum(data**2, dim=axis, keepdim=True))
+    # datalen = torch.sqrt(torch.sum(data**2, dim=axis, keepdim=True))
+    datalen = torch.sqrt(torch.sum(data**2, dim=axis, keepdim=True) + 1e-8)
     return data / (datalen + eps)
 
 
@@ -195,21 +196,22 @@ class VCRender(nn.Module):
         c1 = colors_bxpx3[:, faces_fx3[:, 1], :]
         c2 = colors_bxpx3[:, faces_fx3[:, 2], :]
         mask = torch.ones_like(c0[:, :, :1])
-        # color_bxfx12 = torch.cat((c0, mask, c1, mask, c2, mask), dim=2)
-        color_bxfx9 = torch.cat((c0, c1, c2), dim=2)
+        color_bxfx12 = torch.cat((c0, mask, c1, mask, c2, mask), dim=2)
+        # color_bxfx9 = torch.cat((c0, c1, c2), dim=2)
 
-        # imfeat, improb_bxhxwx1 = linear_rasterizer(self.height, self.width,
-        #                                            points3d_bxfx9,
-        #                                            points2d_bxfx6,
-        #                                            normalz_bxfx1, color_bxfx12)
+        imfeat, improb_bxhxwx1 = linear_rasterizer(self.height, self.width,
+                                                   points3d_bxfx9,
+                                                   points2d_bxfx6,
+                                                   normalz_bxfx1, color_bxfx12)
         # Error!!!
         # pdb.set_trace()
         # 1, 15000, 9
         # 1, 15000, 6
         # 1, 15000, 1
         # 1, 15000, 9
-        imfeat, improb_bxhxwx1 = linear(points3d_bxfx9, points2d_bxfx6,
-                                        normalz_bxfx1, color_bxfx9)
+        # imfeat, improb_bxhxwx1 = linear(points3d_bxfx9, points2d_bxfx6,
+        #                                 normalz_bxfx1, color_bxfx9)
+
         # imfeat = linear(points3d_bxfx9, points2d_bxfx6, normalz_bxfx1,
         #                 color_bxfx12)
 
