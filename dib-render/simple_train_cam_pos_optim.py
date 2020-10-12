@@ -30,9 +30,13 @@ ROOT_DIR = os.path.abspath(os.path.dirname(__file__))
 ###########################
 # Settings
 ###########################
-MESH_SIZE = 5
+# MESH_SIZE = 5
 HEIGHT = 512  # 256
 WIDTH = 512  # 256
+
+MESH_SIZE = 1
+HEIGHT = 640  # 256
+WIDTH = 480  # 256
 
 
 def loadobj(meshfile):
@@ -110,6 +114,29 @@ def compute_camera_params_torch(azimuth, elevation, distance, device):
     return cam_mat, cam_pos
 
 
+def compute_camera_params(azimuth: float, elevation: float, distance: float):
+    theta = np.deg2rad(azimuth)
+    phi = np.deg2rad(elevation)
+    camY = distance * np.sin(phi)
+    temp = distance * np.cos(phi)
+    camX = temp * np.cos(theta)
+    camZ = temp * np.sin(theta)
+    cam_pos = np.array([camX, camY, camZ])
+
+    axisZ = cam_pos.copy()
+    axisY = np.array([0, 1, 0])
+    axisX = np.cross(axisY, axisZ)
+    axisY = np.cross(axisZ, axisX)
+
+    # import pdb
+    # pdb.set_trace()
+    cam_mat = np.array([axisX, axisY, axisZ])
+    l2 = np.atleast_1d(np.linalg.norm(cam_mat, 2, 1))
+    l2[l2 == 0] = 1
+    cam_mat = cam_mat / np.expand_dims(l2, 1)
+    return torch.FloatTensor(cam_mat), torch.FloatTensor(cam_pos)
+
+
 # symmetric over x axis
 def get_spherical_coords_x(X):
     # X is N x 3
@@ -155,6 +182,9 @@ def parse_arguments():
     return parser.parse_args()
 
 
+# https://stackoverflow.com/questions/10967130/how-to-calculate-azimut-elevation-relative-to-a-camera-direction-of-view-in-3d
+# https://www.mathworks.com/help/phased/ref/azel2phitheta.html
+# https://math.stackexchange.com/questions/2346964/elevation-rotation-of-a-matrix-in-polar-coordinates
 def main():
     set_seed(777)
     args = parse_arguments()
@@ -168,7 +198,7 @@ def main():
     # pointnp_px3, facenp_fx3 = loadobj('banana.obj')
     pointnp_px3, facenp_fx3, uv = loadobjtex('obj_000001.obj')
     # pointnp_px3, facenp_fx3 = loadobj('obj_000001.obj')
-    pointnp_px3 = pointnp_px3[:, [1, 2, 0]]
+    # pointnp_px3 = pointnp_px3[:, [1, 2, 0]]
     vertices = torch.from_numpy(pointnp_px3).to(device)
     vertices = vertices.unsqueeze(0)
     faces = torch.from_numpy(facenp_fx3).to(device)
@@ -176,10 +206,10 @@ def main():
     ###########################
     # Normalize mesh position
     ###########################
-    vertices_max = vertices.max()
-    vertices_min = vertices.min()
-    vertices_middle = (vertices_max + vertices_min) / 2.
-    vertices = (vertices - vertices_middle) * MESH_SIZE
+    # vertices_max = vertices.max()
+    # vertices_min = vertices.min()
+    # vertices_middle = (vertices_max + vertices_min) / 2.
+    # vertices = (vertices - vertices_middle) * MESH_SIZE
 
     ###########################
     # Generate vertex color
@@ -221,9 +251,70 @@ def main():
     azimuth = torch.as_tensor(80.0)
     elevation = torch.as_tensor(30.0)
     camera_distance = torch.as_tensor(2.0)
+
+    # az, el, dis = 0.0, 0.0, 0.7
+    az, el, dis = 30.0, 30.0, 0.5
+    cam_mat_np, cam_pos_np = compute_camera_params(90 - az, el, dis)
+
+    azimuth = torch.as_tensor(az)
+    elevation = torch.as_tensor(el)
+    camera_distance = torch.as_tensor(dis)
+
     camera_params = renderer.set_look_at_parameters([90 - azimuth],
                                                     [elevation],
                                                     [camera_distance])
+
+    # Please import camera_matrix from yaml.
+    cam_matrix = torch.zeros((4, 4))
+    cam_matrix[0][0] = 0.34503617852060187
+    cam_matrix[0][1] = 0.4966647969820521
+    cam_matrix[0][2] = -0.7964132815006769
+    cam_matrix[1][0] = 0.25440858723291637
+    cam_matrix[1][1] = 0.7672673525701276
+    cam_matrix[1][2] = 0.5887079755041368
+    cam_matrix[2][0] = 0.9034524371841891
+    cam_matrix[2][1] = -0.40573992793266556
+    cam_matrix[2][2] = 0.13837920590588912
+    cam_matrix[0][3] = (-1) * -0.2452901303768158
+    cam_matrix[1][3] = -0.06999021768569946
+    cam_matrix[2][3] = 0.701391875743866
+    cam_matrix[3, 3] = 1
+
+    # cam_matrix = torch.zeros((4, 4))
+    # cam_matrix[0][0] = -0.7923663012097442
+    # cam_matrix[0][1] = -0.4749863636047764
+    # cam_matrix[0][2] = -0.382810134527157
+    # cam_matrix[1][0] = -0.5055858233932355
+    # cam_matrix[1][1] = 0.16015103875171016
+    # cam_matrix[1][2] = 0.8477821771956121
+    # cam_matrix[2][0] = -0.3413775327858779
+    # cam_matrix[2][1] = 0.8652974050442191
+    # cam_matrix[2][2] = -0.3670446579542706
+    # cam_matrix[0][3] = (-1) * 0.23453304171562195
+    # cam_matrix[1][3] = -0.056242525577545166
+    # cam_matrix[2][3] = 0.701391875743866
+    # cam_matrix[3, 3] = 1
+
+    conv_mat3 = torch.eye(3)
+    conv_mat3[1, 1] = -1.0
+    conv_mat3[2, 2] = -1.0
+    camera_r_param = conv_mat3 @ cam_matrix[:3, :3]
+    tes_conv_matrix2 = torch.eye(4)
+    tes_conv_matrix2[:3, :3] = torch.inverse(camera_r_param)
+    camera_t_param = (tes_conv_matrix2 @ cam_matrix)[:3, 3]
+    # camera_params[0][0] = camera_r_param.type_as(camera_params[0])
+    # camera_params[1][0] = camera_t_param.type_as(camera_params[0])
+
+    cx = 325.2611
+    cy = 242.04899
+    fx = 572.4114
+    fy = 573.57043
+    camera_proj_mat_np = np.array([[fx / cx], [fy / cy], [-1]])
+    camera_proj_mat = torch.FloatTensor(camera_proj_mat_np).cuda()
+    # camera_params[2] = camera_proj_mat
+
+    # import pdb
+    # pdb.set_trace()
 
     # Setting for Phong Renderer
     bs = len(vertices)
@@ -234,10 +325,14 @@ def main():
     shininess = np.array([100], dtype=np.float32).reshape(-1, 1)
     tfshi = torch.from_numpy(shininess).repeat(bs, 1)
 
-    lightdirect = 2 * np.random.rand(bs, 3).astype(np.float32) - 1
-    lightdirect[:, 2] += 2
+    # lightdirect = 2 * np.random.rand(bs, 3).astype(np.float32) - 1
+    # lightdirect = 2 * np.ones((bs, 3)).astype(np.float32) - 1  # -1 - 1
+    # lightdirect[:, 2] += 2
+    lightdirect = np.array([[1.0], [1.0], [0.5]]).astype(np.float32)
     tflight = torch.from_numpy(lightdirect)
     tflight_bx3 = tflight
+    # import pdb
+    # pdb.set_trace()
 
     # For Phong and VertexColor Setting
     if args.use_texture:
@@ -258,6 +353,8 @@ def main():
     # Show Reference RGB and Silhuette Image
     silhouete_np = silhouete_ref.cpu().numpy()[0]
     predictions_np = predictions_ref.cpu().numpy()[0]
+    # silhouete_np = silhouete_ref.cpu().detach().numpy()[0]
+    # predictions_np = predictions_ref.cpu().detach().numpy()[0]
     plt.figure(figsize=(10, 10))
     plt.subplot(1, 2, 1)
     plt.imshow(silhouete_np[..., 0])
@@ -284,7 +381,7 @@ def main():
 
             # Initiale position parameter
             self.camera_position_plane = nn.Parameter(
-                torch.from_numpy(np.array([110.0, 60.0, 4.0],
+                torch.from_numpy(np.array([110.0, 60.0, 0.5],
                                           dtype=np.float32)).to(device))
 
             # Renderer Setting
