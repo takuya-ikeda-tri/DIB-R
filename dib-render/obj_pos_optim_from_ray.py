@@ -31,10 +31,8 @@ ROOT_DIR = os.path.abspath(os.path.dirname(__file__))
 ###########################
 # Settings
 ###########################
-# MESH_SIZE = 5
 HEIGHT = 512  # 256
 WIDTH = 512  # 256
-
 MESH_SIZE = 1
 HEIGHT = 640  # 256
 WIDTH = 480  # 256
@@ -129,8 +127,6 @@ def compute_camera_params(azimuth: float, elevation: float, distance: float):
     axisX = np.cross(axisY, axisZ)
     axisY = np.cross(axisZ, axisX)
 
-    # import pdb
-    # pdb.set_trace()
     cam_mat = np.array([axisX, axisY, axisZ])
     l2 = np.atleast_1d(np.linalg.norm(cam_mat, 2, 1))
     l2[l2 == 0] = 1
@@ -194,23 +190,10 @@ def main():
     ###########################
     # Load mesh
     ###########################
-    # pointnp_px3, facenp_fx3 = loadobj('sphere.obj')
-    # pointnp_px3 /= 3.0
-    # pointnp_px3, facenp_fx3 = loadobj('banana.obj')
     pointnp_px3, facenp_fx3, uv = loadobjtex('obj_000001.obj')
-    # pointnp_px3, facenp_fx3 = loadobj('obj_000001.obj')
-    # pointnp_px3 = pointnp_px3[:, [1, 2, 0]]
     vertices = torch.from_numpy(pointnp_px3).to(device)
     vertices = vertices.unsqueeze(0)
     faces = torch.from_numpy(facenp_fx3).to(device)
-
-    ###########################
-    # Normalize mesh position
-    ###########################
-    # vertices_max = vertices.max()
-    # vertices_min = vertices.min()
-    # vertices_middle = (vertices_max + vertices_min) / 2.
-    # vertices = (vertices - vertices_middle) * MESH_SIZE
 
     ###########################
     # Generate vertex color
@@ -224,8 +207,6 @@ def main():
     # Generate texture mapping
     ###########################
     if args.use_texture:
-        # uv = get_spherical_coords_x(vertices[0].cpu().numpy())
-        # uv = torch.from_numpy(uv).cuda()
         uv = torch.from_numpy(uv).type_as(vertices)
         uv = uv.unsqueeze(0)  # 1, 6078, 2
 
@@ -248,21 +229,6 @@ def main():
     else:
         renderer_mode = 'VertexColor'
     renderer = Renderer(HEIGHT, WIDTH, mode=renderer_mode)
-
-    azimuth = torch.as_tensor(80.0)
-    elevation = torch.as_tensor(30.0)
-    camera_distance = torch.as_tensor(2.0)
-
-    # az, el, dis = 0.0, 0.0, 0.7
-    az, el, dis = 30.0, 30.0, 0.5
-    cam_mat_np, cam_pos_np = compute_camera_params(90 - az, el, dis)
-
-    cx = 325.2611
-    cy = 242.04899
-    fx = 572.4114
-    fy = 573.57043
-    camera_proj_mat_np = np.array([[fx / cx], [fy / cy], [-1]])
-    camera_proj_mat = torch.FloatTensor(camera_proj_mat_np).cuda()
 
     def make_trans_mat_from_axis(angle_axis, trans):
         mat = torch.eye(4)
@@ -313,94 +279,70 @@ def main():
         camera_t_param = (tes_conv_matrix2 @ mat)[:3, 3]
         return camera_r_param, camera_t_param
 
-    camera_params = []
-    angle_axis = torch.tensor([[0.8, 0.0, 0.8]], dtype=torch.float)
-    # angle_axis = torch.tensor([[0.6, 0.0, 0.6]], dtype=torch.float)
-    quat = kornia.angle_axis_to_quaternion(angle_axis)
-    # trans = torch.tensor(
-    #     [0.0, 0.0, 0.5], dtype=torch.float)
-    trans = torch.tensor(
-        [0.5], dtype=torch.float)
-    # camera_r_param, camera_t_param = make_camera_mat_from_axis(
-    #     angle_axis, trans)
-    camera_r_param, camera_t_param = make_camera_mat_from_quat(
-        quat, trans)
-    camera_params.append(camera_r_param[None].cuda())
-    camera_params.append(camera_t_param[None].cuda())
-    camera_params.append(camera_proj_mat)
+    def xy_calc_from_zuv(ux, vy, cx, cy, fx, fy, z):
+        x = (ux - cx) * z / fx
+        y = (vy - cy) * z / fy
+        return x, y
 
-    # quat = tensor([[0.8442, 0.3790, 0.0000, 0.3790]])
-    # quat = tensor([[0.9113, 0.2911, 0.0000, 0.2911]])
-    # import pdb
-    # pdb.set_trace()
+    def make_camera_mat_from_quat_uv(quat, trans, ux, vy,
+                                     cx=325.2611, cy=242.04899,
+                                     fx=572.4114, fy=573.57043):
+        # mat = make_trans_mat_from_quat(quat, trans)
+        mat = make_trans_mat_from_quat_z(quat, trans)
+        mat03mul = torch.tensor(
+            (ux-cx)/fx, dtype=torch.float).type_as(mat[2, 3])
+        mat13mul = torch.tensor(
+            (vy-cy)/fy, dtype=torch.float).type_as(mat[2, 3])
+        mat[0, 3] = mat[2, 3] * mat03mul * (-1)
+        mat[1, 3] = mat[2, 3] * mat13mul
+        conv_mat3 = torch.eye(3)
+        conv_mat3[1, 1] = -1.0
+        conv_mat3[2, 2] = -1.0
+        camera_r_param = conv_mat3 @ mat[:3, :3]
+        tes_conv_matrix2 = torch.eye(4)
+        tes_conv_matrix2[:3, :3] = torch.inverse(camera_r_param)
+        camera_t_param = (tes_conv_matrix2 @ mat)[:3, 3]
+        return camera_r_param, camera_t_param
 
-    # azimuth = torch.as_tensor(az)
-    # elevation = torch.as_tensor(el)
-    # camera_distance = torch.as_tensor(dis)
+    # from PIL import Image
+    # im = Image.open('./dataset/GreenTeaRealADOffice/rgb/0.jpg')
+    color_im = Image.open('./dataset/GreeTeaRealADOffice/rgb/0.jpg')
+    depth_im = Image.open('./dataset/GreeTeaRealADOffice/depth/0.png')
+    mask_im = Image.open('./dataset/GreeTeaRealADOffice/mask/0.png')
+    import yaml
+    with open('./dataset/GreeTeaRealADOffice/pose/0.yaml', 'r') as yml:
+        pose_config = yaml.load(yml)
+    import json
+    with open('./dataset/GreeTeaRealADOffice/camera.json') as json_file:
+        camera_json = json.load(json_file)
 
-    # camera_params = renderer.set_look_at_parameters([90 - azimuth],
-    #                                                 [elevation],
-    #                                                 [camera_distance])
+    cx = camera_json['cx']
+    cy = camera_json['cy']
+    fx = camera_json['fx']
+    fy = camera_json['fy']
 
-    # import pdb
-    # pdb.set_trace()
-
-    # Please import camera_matrix from yaml.
-    # cam_matrix = torch.zeros((4, 4))
-    # cam_matrix[0][0] = 0.34503617852060187
-    # cam_matrix[0][1] = 0.4966647969820521
-    # cam_matrix[0][2] = -0.7964132815006769
-    # cam_matrix[1][0] = 0.25440858723291637
-    # cam_matrix[1][1] = 0.7672673525701276
-    # cam_matrix[1][2] = 0.5887079755041368
-    # cam_matrix[2][0] = 0.9034524371841891
-    # cam_matrix[2][1] = -0.40573992793266556
-    # cam_matrix[2][2] = 0.13837920590588912
-    # cam_matrix[0][3] = (-1) * -0.2452901303768158
-    # cam_matrix[1][3] = -0.06999021768569946
-    # cam_matrix[2][3] = 0.701391875743866
-    # cam_matrix[3, 3] = 1
-
-    # cam_matrix = torch.zeros((4, 4))
-    # cam_matrix[0][0] = -0.7923663012097442
-    # cam_matrix[0][1] = -0.4749863636047764
-    # cam_matrix[0][2] = -0.382810134527157
-    # cam_matrix[1][0] = -0.5055858233932355
-    # cam_matrix[1][1] = 0.16015103875171016
-    # cam_matrix[1][2] = 0.8477821771956121
-    # cam_matrix[2][0] = -0.3413775327858779
-    # cam_matrix[2][1] = 0.8652974050442191
-    # cam_matrix[2][2] = -0.3670446579542706
-    # cam_matrix[0][3] = (-1) * 0.23453304171562195
-    # cam_matrix[1][3] = -0.056242525577545166
-    # cam_matrix[2][3] = 0.701391875743866
-    # cam_matrix[3, 3] = 1
-
-    # conv_mat3 = torch.eye(3)
-    # conv_mat3[1, 1] = -1.0
-    # conv_mat3[2, 2] = -1.0
-    # camera_r_param = conv_mat3 @ cam_matrix[:3, :3]
-    # tes_conv_matrix2 = torch.eye(4)
-    # tes_conv_matrix2[:3, :3] = torch.inverse(camera_r_param)
-    # camera_t_param = (tes_conv_matrix2 @ cam_matrix)[:3, 3]
-    # camera_params[0][0] = camera_r_param.type_as(camera_params[0])
-    # camera_params[1][0] = camera_t_param.type_as(camera_params[0])
-
-    # cx = 325.2611
-    # cy = 242.04899
-    # fx = 572.4114
-    # fy = 573.57043
-    # camera_proj_mat_np = np.array([[fx / cx], [fy / cy], [-1]])
-    # camera_proj_mat = torch.FloatTensor(camera_proj_mat_np).cuda()
-    # camera_params[2] = camera_proj_mat
+    def calc_uv_from_xyz(translation, cx, cy, fx, fy):
+        ux = translation[0][0]/translation[2][0]*fx + cx
+        vy = translation[1][0]/translation[2][0]*fy + cy
+        return ux, vy
 
     # import pdb
     # pdb.set_trace()
+
+    translation = pose_config[0]['X_CO']['translation']
+    mask_im = np.array(mask_im)[:, :, None]/255
+    color_im = np.array(color_im) * mask_im
+    ux, vy = calc_uv_from_xyz(translation, cx, cy, fx, fy)
+
+    # import pdb
+    # pdb.set_trace()
+    # color_im = Image.fromarray(color_im.astype(np.uint8))
+    # color_im.show()
+    # depth_im.show()
+    # mask_im.show()
 
     # Setting for Phong Renderer
     bs = len(vertices)
-    # material = np.array([[0.1, 0.1, 0.1], [1.0, 1.0, 1.0], [0.4, 0.4, 0.4]],
-    #                     dtype=np.float32).reshape(-1, 3, 3)
     material = np.array([[0.8, 0.8, 0.8], [1.0, 1.0, 1.0], [0.4, 0.4, 0.4]],
                         dtype=np.float32).reshape(-1, 3, 3)
     tfmat = torch.from_numpy(material).repeat(bs, 1, 1)
@@ -412,8 +354,26 @@ def main():
     lightdirect = np.array([[1.0], [1.0], [0.5]]).astype(np.float32)
     tflight = torch.from_numpy(lightdirect)
     tflight_bx3 = tflight
-    # import pdb
-    # pdb.set_trace()
+
+    '''
+    camera_params = []
+    angle_axis = torch.tensor([[0.8, 0.0, 0.8]], dtype=torch.float)
+    quat = kornia.angle_axis_to_quaternion(angle_axis)
+    transz = torch.tensor(
+        [0.9], dtype=torch.float)
+    ux = 500
+    vy = 100
+    cx = 325.2611
+    cy = 242.04899
+    fx = 572.4114
+    fy = 573.57043
+    camera_r_param, camera_t_param = make_camera_mat_from_quat_uv(
+        quat, transz, ux, vy)
+    camera_proj_mat_np = np.array([[fx / cx], [fy / cy], [-1]])
+    camera_proj_mat = torch.FloatTensor(camera_proj_mat_np).cuda()
+    camera_params.append(camera_r_param[None].cuda())
+    camera_params.append(camera_t_param[None].cuda())
+    camera_params.append(camera_proj_mat)
 
     # For Phong and VertexColor Setting
     if args.use_texture:
@@ -431,11 +391,17 @@ def main():
             camera_params=camera_params,
             colors_bxpx3=colors)
 
+    '''
+    # predictions_ref: torch.Size([1, 480, 640, 3]), torch.float32, cuda0
+    # silhouete_ref: torch.Size([1, 480, 640, 1]), torch.float32, cuda0
+    predictions_ref = torch.from_numpy(
+        (color_im[None]/255.0).astype(np.float32)).to(device)
+    silhouete_ref = torch.from_numpy(
+        (mask_im[None]).astype(np.float32)).to(device)
     # Show Reference RGB and Silhuette Image
     silhouete_np = silhouete_ref.cpu().numpy()[0]
     predictions_np = predictions_ref.cpu().numpy()[0]
-    # silhouete_np = silhouete_ref.cpu().detach().numpy()[0]
-    # predictions_np = predictions_ref.cpu().detach().numpy()[0]
+
     plt.figure(figsize=(10, 10))
     plt.subplot(1, 2, 1)
     plt.imshow(silhouete_np[..., 0])
@@ -461,50 +427,28 @@ def main():
             self.register_buffer('sil_ref', sil_ref)
 
             # Initiale position parameter
-            # self.camera_position_plane = nn.Parameter(
-            #     torch.from_numpy(np.array([110.0, 60.0, 0.5],
-            #                               dtype=np.float32)).to(device))
-
-            # self.camera_rot_axis = nn.Parameter(
-            #     torch.from_numpy(np.array([[0.6, 0.0, 0.6]],
-            #                               dtype=np.float32)).to(device))
             # quat = kornia.angle_axis_to_quaternion(
-            #     torch.tensor([0.6, 0.0, 0.6], dtype=torch.float))
+            #     torch.tensor([0.8-0.2, -0.2, 0.8-0.2], dtype=torch.float))
+            #     torch.tensor([0.8-0.3, 0.0, 0.8-0.3], dtype=torch.float))
+            # quat = kornia.angle_axis_to_quaternion(
+            #     torch.tensor([0.2, 0.2, 0.2], dtype=torch.float))
             quat = kornia.angle_axis_to_quaternion(
-                torch.tensor([0.8-np.pi, 0.0, 0.8-np.pi], dtype=torch.float))
-            # self.camera_quat = nn.Parameter(torch.from_numpy(
-            #     np.array([[0.9113, 0.2911, 0.0000, 0.2911]],
-            #              dtype=np.float32)).to(device))
+                torch.tensor([1.0, 0.2, 1.0], dtype=torch.float))
             self.camera_quat = nn.Parameter(torch.from_numpy(
                 np.array([[quat[0], quat[1], quat[2], quat[3]]],
                          dtype=np.float32)).to(device))
-            # self.camera_quat = torch.from_numpy(
-            #     np.array([[quat[0], quat[1], quat[2], quat[3]]],
-            #              dtype=np.float32)).to(device)
 
-            # self.camera_trans_axis = nn.Parameter(
-            #     torch.from_numpy(np.array([[0.0, 0.0, 0.9]],
-            #                               dtype=np.float32)).to(device))
-
-            # self.camera_trans_axis = torch.from_numpy(
-            #     np.array([[0.0, 0.0, 0.5]], dtype=np.float32)).to(device)
             self.camera_trans_axis = nn.Parameter(
-                torch.tensor([0.7], dtype=torch.float).to(device))
-            # import pdb
-            # pdb.set_trace()
+                torch.tensor([0.8], dtype=torch.float).to(device))
 
-            cx = 325.2611
-            cy = 242.04899
-            fx = 572.4114
-            fy = 573.57043
+            # cx = 325.2611
+            # cy = 242.04899
+            # fx = 572.4114
+            # fy = 573.57043
             camera_proj_mat_np = np.array(
                 [[fx / cx], [fy / cy], [-1]], dtype=np.float32)
             self.camera_proj_mat = torch.from_numpy(
                 camera_proj_mat_np).to(device)
-
-            # camera_params.append(camera_r_param[None].cuda())
-            # camera_params.append(camera_t_param[None].cuda())
-            # camera_params.append(camera_proj_mat)
 
             # Renderer Setting
             self.vertices = verticesc
@@ -516,30 +460,10 @@ def main():
             self.tfshi = tfshic
 
         def forward(self):
-            # cam_mat, cam_pos = compute_camera_params_torch(
-            #     90 - self.camera_position_plane[0],
-            #     self.camera_position_plane[1], self.camera_position_plane[2],
-            #     self.device)
-            # # cam_pos[0] += 1.0
-
-            # # TODO(taku): make the func for calculation of camera matrix
-            # _, _, camera_mtx = self.renderer.calc_look_at_parameters(
-            #     90 - self.camera_position_plane[0],
-            #     self.camera_position_plane[1], self.camera_position_plane[2],
-            #     self.device)
-
-            # camera_params = [
-            #     cam_mat[None].to(self.device), cam_pos[None].to(self.device),
-            #     camera_mtx
-            # ]
-
-            # camera_r_param, camera_t_param = make_camera_mat_from_axis(
-            #     self.camera_rot_axis, self.camera_trans_axis)
-            camera_r_param, camera_t_param = make_camera_mat_from_quat(
-                self.camera_quat, self.camera_trans_axis)
-
-            # import pdb
-            # pdb.set_trace()
+            # camera_r_param, camera_t_param = make_camera_mat_from_quat_uv(
+            #     self.camera_quat, self.camera_trans_axis, ux, vy)
+            camera_r_param, camera_t_param = make_camera_mat_from_quat_uv(
+                self.camera_quat, self.camera_trans_axis, ux, vy, cx, cy, fx, fy)
             camera_params = [camera_r_param[None].to(self.device),
                              camera_t_param[None].to(self.device),
                              self.camera_proj_mat]
@@ -596,11 +520,9 @@ def main():
             loss, pre_img, pre_sil = model()
             loss.backward()
             optimizer.step()
-
             loop.set_description('Optimizing (loss %.4f)' % loss.data)
             print(loss)
-            # if loss.item() < 200:
-            #     break
+            # print(model.camera_trans_axis)
 
         if i % 10 == 0:
             image = pre_img[0].detach().cpu().numpy()
