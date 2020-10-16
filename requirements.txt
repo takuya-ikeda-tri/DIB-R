@@ -6,3 +6,4 @@ kornia==0.4.0
 scikit-image==0.17.2
 tqdm==4.50.2
 imageio==2.9.0
+pytorch3d==0.2.5
