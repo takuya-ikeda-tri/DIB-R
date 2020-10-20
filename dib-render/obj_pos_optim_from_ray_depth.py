@@ -367,8 +367,6 @@ def main():
     #     return result
 
     def points_from_depth_uv_torch(depth_im, K):
-        # import pdb
-        # pdb.set_trace()
         points = []
         K = torch.from_numpy(K).type_as(depth_im)
         h, w = depth_im.shape
@@ -380,6 +378,18 @@ def main():
                     xyz[2] = depth_im[hi, wi]
                     points.append(xyz)
         result = torch.stack(points)
+        return result
+
+    def points_from_depth_uv_torch_mat(depth_im, K):
+        K = torch.from_numpy(K).type_as(depth_im)
+        hw_ind = torch.nonzero(depth_im)
+        coord_mat = torch.cat(
+            [hw_ind[:, [1, 0]],
+             torch.ones(hw_ind.shape[0])[:, None].cuda()],
+            dim=1).t()
+        depth_array = depth_im[(depth_im != 0).cpu().numpy()]
+        result = (torch.inverse(K) @ coord_mat) * depth_array
+        result = result.t()
         return result
 
     def transform_pts_Rt_th(pts, R, t):
@@ -621,7 +631,9 @@ def main():
                 camera_params=camera_params,
                 colors_bxpx3=xyzs)
 
-            pre_points = points_from_depth_uv_torch(
+            # pre_points = points_from_depth_uv_torch(
+            #     depth_predictions[0, :, :, 2], K)
+            pre_points = points_from_depth_uv_torch_mat(
                 depth_predictions[0, :, :, 2], K)
             # import pdb
             # pdb.set_trace()
@@ -630,7 +642,7 @@ def main():
             loss = 0
             # loss = torch.sum((predictions - self.image_ref)**2)
             # loss += torch.sum((silhouette - self.sil_ref)**2)
-            loss = torch.mean((predictions - self.image_ref)**2)
+            # loss = torch.mean((predictions - self.image_ref)**2)
             loss += torch.mean((silhouette - self.sil_ref)**2)
             # Chamfer Distance
             # https://gist.github.com/WangZixuan/4c4cdf49ce9989175e94524afc946726
@@ -639,8 +651,8 @@ def main():
             # https://discuss.pytorch.org/t/how-to-find-k-nearest-neighbor-of-a-tensor/51593
             # import pdb
             # pdb.set_trace()
-            loss += chamfer.chamfer_distance(self.points_ref[None],
-                                             pre_points[None])[0]
+            # loss += chamfer.chamfer_distance(self.points_ref[None],
+            #                                  pre_points[None])[0]
             return loss, predictions, silhouette, depth_predictions[0, :, :, 2]
 
     if not args.use_texture:
