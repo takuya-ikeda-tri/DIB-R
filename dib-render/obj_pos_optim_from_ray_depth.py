@@ -32,8 +32,6 @@ ROOT_DIR = os.path.abspath(os.path.dirname(__file__))
 ###########################
 # Settings
 ###########################
-HEIGHT = 512  # 256
-WIDTH = 512  # 256
 MESH_SIZE = 1
 HEIGHT = 640  # 256
 WIDTH = 480  # 256
@@ -196,9 +194,6 @@ def main():
     vertices = vertices.unsqueeze(0)
     faces = torch.from_numpy(facenp_fx3).to(device)
 
-    # TEST
-    chamfer.chamfer_distance(vertices, vertices)
-
     ###########################
     # Generate vertex color
     ###########################
@@ -232,62 +227,15 @@ def main():
         renderer_mode = 'Phong'
     else:
         renderer_mode = 'VertexColor'
+
     renderer = Renderer(HEIGHT, WIDTH, mode=renderer_mode)
     vc_renderer = Renderer(HEIGHT, WIDTH, mode='VertexColor')
-
-    def make_trans_mat_from_axis(angle_axis, trans):
-        mat = torch.eye(4)
-        mat[:3, :3] = kornia.angle_axis_to_rotation_matrix(angle_axis)
-        mat[:3, 3] = trans
-        return mat
-
-    def make_trans_mat_from_axis_z(angle_axis, transz):
-        mat = torch.eye(4).type_as(angle_axis)
-        mat[:3, :3] = kornia.angle_axis_to_rotation_matrix(angle_axis)
-        mat[2, 3] = transz
-        return mat
-
-    def make_trans_mat_from_quat(quat, trans):
-        mat = torch.eye(4)
-        mat[:3, :3] = kornia.quaternion_to_rotation_matrix(quat)
-        mat[:3, 3] = trans
-        import pdb
-        pdb.set_trace()
-        return mat
 
     def make_trans_mat_from_quat_z(quat, transz):
         mat = torch.eye(4)
         mat[:3, :3] = kornia.quaternion_to_rotation_matrix(quat)
         mat[2, 3] = transz
         return mat
-
-    def make_camera_mat_from_axis(angle_axis, trans):
-        mat = make_trans_mat_from_axis(angle_axis, trans)
-        conv_mat3 = torch.eye(3)
-        conv_mat3[1, 1] = -1.0
-        conv_mat3[2, 2] = -1.0
-        camera_r_param = conv_mat3 @ mat[:3, :3]
-        tes_conv_matrix2 = torch.eye(4)
-        tes_conv_matrix2[:3, :3] = torch.inverse(camera_r_param)
-        camera_t_param = (tes_conv_matrix2 @ mat)[:3, 3]
-        return camera_r_param, camera_t_param
-
-    def make_camera_mat_from_quat(quat, trans):
-        # mat = make_trans_mat_from_quat(quat, trans)
-        mat = make_trans_mat_from_quat_z(quat, trans)
-        conv_mat3 = torch.eye(3)
-        conv_mat3[1, 1] = -1.0
-        conv_mat3[2, 2] = -1.0
-        camera_r_param = conv_mat3 @ mat[:3, :3]
-        tes_conv_matrix2 = torch.eye(4)
-        tes_conv_matrix2[:3, :3] = torch.inverse(camera_r_param)
-        camera_t_param = (tes_conv_matrix2 @ mat)[:3, 3]
-        return camera_r_param, camera_t_param
-
-    def xy_calc_from_zuv(ux, vy, cx, cy, fx, fy, z):
-        x = (ux - cx) * z / fx
-        y = (vy - cy) * z / fy
-        return x, y
 
     def make_camera_mat_from_quat_uv(quat,
                                      trans,
@@ -297,7 +245,6 @@ def main():
                                      cy=242.04899,
                                      fx=572.4114,
                                      fy=573.57043):
-        # mat = make_trans_mat_from_quat(quat, trans)
         mat = make_trans_mat_from_quat_z(quat, trans)
         mat03mul = torch.tensor((ux - cx) / fx,
                                 dtype=torch.float).type_as(mat[2, 3])
@@ -323,62 +270,6 @@ def main():
         transy = mat13mul * transz
         trans = torch.stack([transx, transy, transz])
         return trans
-
-    # TODO(taku): need to refactor
-    def points_from_depth(depth_im, K):
-        points = []
-        h, w = depth_im.shape
-        for hi in range(h):
-            for wi in range(w):
-                if depth_im[hi, wi] != 0:
-                    xyz = (np.linalg.inv(K) @ np.array([wi, hi, 1])) \
-                        * depth_im[hi, wi]
-                    xyz[2] = depth_im[hi, wi]
-                    points.append(xyz)
-        return points
-
-    def points_from_depth_uv(depth_im, K, u, v):
-        points = []
-        h, w = depth_im.shape
-        init_depth = depth_im[int(v), int(u)]
-        for hi in range(h):
-            for wi in range(w):
-                if (depth_im[hi, wi] !=
-                        0) and abs(init_depth - depth_im[hi, wi]) < 0.4:
-                    xyz = (np.linalg.inv(K) @ np.array([wi, hi, 1])) \
-                        * depth_im[hi, wi]
-                    xyz[2] = depth_im[hi, wi]
-                    points.append(xyz)
-        return points
-
-    # def points_from_depth_uv_torch(depth_im, K):
-    #     points = []
-    #     K = torch.from_numpy(K).type_as(depth_im)
-    #     h, w = depth_im.shape
-    #     hr = torch.nonzero(depth_im)[:, 0]
-    #     wr = torch.nonzero(depth_im)[:, 1]
-    #     for hi in hr:
-    #         for wi in wr:
-    #             xyz = (torch.inverse(K) @ torch.tensor(
-    #                 [wi, hi, 1]).type_as(depth_im)) * depth_im[hi, wi]
-    #             xyz[2] = depth_im[hi, wi]
-    #             points.append(xyz)
-    #     result = torch.stack(points)
-    #     return result
-
-    def points_from_depth_uv_torch(depth_im, K):
-        points = []
-        K = torch.from_numpy(K).type_as(depth_im)
-        h, w = depth_im.shape
-        for hi in range(h):
-            for wi in range(w):
-                if (depth_im[hi, wi] != 0):
-                    xyz = (torch.inverse(K) @ torch.tensor(
-                        [wi, hi, 1]).type_as(depth_im)) * depth_im[hi, wi]
-                    xyz[2] = depth_im[hi, wi]
-                    points.append(xyz)
-        result = torch.stack(points)
-        return result
 
     def points_from_depth_uv_torch_mat(depth_im, K):
         K = torch.from_numpy(K).type_as(depth_im)
@@ -409,18 +300,22 @@ def main():
         pts_t = torch.matmul(R, pts.t()) + t.view(3, 1)
         return pts_t.t()
 
-    # from PIL import Image
-    # im = Image.open('./dataset/GreenTeaRealADOffice/rgb/0.jpg')
-    color_im = Image.open('./dataset/rgb/0.jpg')
-    depth_im = Image.open('./dataset/depth/0.png')
-    mask_im = Image.open('./dataset/mask/0.png')
-    import yaml
-    with open('./dataset/pose/0.yaml', 'r') as yml:
-        pose_config = yaml.load(yml)
+    def calc_uv_from_xyz(translation, cx, cy, fx, fy):
+        ux = translation[0] / translation[2] * fx + cx
+        vy = translation[1] / translation[2] * fy + cy
+        return ux, vy
+
+    # For Debug of point cloud
+    def debug_pcd(ref_points):
+        # ref_points = np.array(points_from_depth_uv(depth_im, K, ux, vy))
+        import open3d as o3d
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(ref_points)
+        o3d.visualization.draw_geometries([pcd])
+
     import json
     with open('./dataset/camera.json') as json_file:
         camera_json = json.load(json_file)
-
     cx = camera_json['cx']
     cy = camera_json['cy']
     fx = camera_json['fx']
@@ -431,38 +326,35 @@ def main():
     K[0, 2] = cx
     K[1, 2] = cy
 
-    def calc_uv_from_xyz(translation, cx, cy, fx, fy):
-        ux = translation[0] / translation[2] * fx + cx
-        vy = translation[1] / translation[2] * fy + cy
-        return ux, vy
+    # Pose Setting from file
+    # import yaml
+    # with open('./dataset/pose/0.yaml', 'r') as yml:
+    #     pose_config = yaml.load(yml)
+    # translation = np.array(pose_config[0]['X_CO']['translation'],
+    #                        dtype=np.float32)[:, 0]
+    # translation = torch.from_numpy(translation)
+    # transz = torch.tensor([translation[2]], dtype=torch.float)
+    # rotation = np.array(pose_config[0]['X_CO']['rotation'], dtype=np.float32)
+    # rotation = torch.from_numpy(rotation)
+    # quat = kornia.rotation_matrix_to_quaternion(rotation)
+    # ux, vy = calc_uv_from_xyz(translation, cx, cy, fx, fy)
 
-    translation = np.array(pose_config[0]['X_CO']['translation'],
-                           dtype=np.float32)[:, 0]
-    translation = torch.from_numpy(translation)
-    # [[-0.05878896513900771], [-0.029813012660397917], [0.7584533052909611]]
-    rotation = np.array(pose_config[0]['X_CO']['rotation'], dtype=np.float32)
-    rotation = torch.from_numpy(rotation)
-    quat = kornia.rotation_matrix_to_quaternion(rotation)
-
-    # import pdb
-    # pdb.set_trace()
-
-    mask_im = (np.array(mask_im) / 255)[:, :, None]
-    color_im = np.array(color_im) * mask_im
-    depth_im = np.array(depth_im) * mask_im[:, :, 0] / 1000.0  # [mm] -> [m]
+    # Pose Setting by manual
+    angle_axis = torch.tensor([[0.8, 0.0, 0.8]], dtype=torch.float)
+    quat = kornia.angle_axis_to_quaternion(angle_axis)
+    rotation = kornia.quaternion_to_rotation_matrix(quat)[0]
+    translation = torch.tensor([0.0, 0.0, 0.8], dtype=torch.float)
+    transz = torch.tensor([translation[2]], dtype=torch.float)
+    # transz = torch.tensor([0.9], dtype=torch.float)
     ux, vy = calc_uv_from_xyz(translation, cx, cy, fx, fy)
-
-    # points = np.array(points_from_depth(depth_im, K))
-    ref_points = np.array(points_from_depth_uv(depth_im, K, ux, vy))
-    import open3d as o3d
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(ref_points)
-    # o3d.visualization.draw_geometries([pcd])
-
-    # color_im = Image.fromarray(color_im.astype(np.uint8))
-    # color_im.show()
-    # depth_im.show()
-    # mask_im.show()
+    camera_r_param, camera_t_param = make_camera_mat_from_quat_uv(
+        quat, transz, ux, vy)
+    camera_proj_mat_np = np.array([[fx / cx], [fy / cy], [-1]])
+    camera_proj_mat = torch.FloatTensor(camera_proj_mat_np).cuda()
+    camera_params = []
+    camera_params.append(camera_r_param[None].cuda())
+    camera_params.append(camera_t_param[None].cuda())
+    camera_params.append(camera_proj_mat)
 
     # Setting for Phong Renderer
     bs = len(vertices)
@@ -471,32 +363,11 @@ def main():
     tfmat = torch.from_numpy(material).repeat(bs, 1, 1)
     shininess = np.array([100], dtype=np.float32).reshape(-1, 1)
     tfshi = torch.from_numpy(shininess).repeat(bs, 1)
-
-    # lightdirect = 2 * np.random.rand(bs, 3).astype(np.float32) - 1  # -1 - 1
-    # lightdirect[:, 2] += 2
     lightdirect = np.array([[1.0], [1.0], [0.5]]).astype(np.float32)
     tflight = torch.from_numpy(lightdirect)
     tflight_bx3 = tflight
 
-    camera_params = []
-    transz = torch.tensor([translation[2]], dtype=torch.float)
-    # angle_axis = torch.tensor([[0.8, 0.0, 0.8]], dtype=torch.float)
-    # quat = kornia.angle_axis_to_quaternion(angle_axis)
-    # transz = torch.tensor([0.9], dtype=torch.float)
-    # ux = 500
-    # vy = 100
-    # cx = 325.2611
-    # cy = 242.04899
-    # fx = 572.4114
-    # fy = 573.57043
-    camera_r_param, camera_t_param = make_camera_mat_from_quat_uv(
-        quat, transz, ux, vy)
-    camera_proj_mat_np = np.array([[fx / cx], [fy / cy], [-1]])
-    camera_proj_mat = torch.FloatTensor(camera_proj_mat_np).cuda()
-    camera_params.append(camera_r_param[None].cuda())
-    camera_params.append(camera_t_param[None].cuda())
-    camera_params.append(camera_proj_mat)
-    '''
+    # Render RGB, Silhouette Image
     # For Phong and VertexColor Setting
     if args.use_texture:
         predictions_ref, silhouete_ref, _ = renderer(
@@ -512,47 +383,53 @@ def main():
             points=[vertices, faces.long()],
             camera_params=camera_params,
             colors_bxpx3=colors)
-    '''
 
-    # import pdb
-    # pdb.set_trace()
+    # Render depth image and calc points
     xyzs = transform_pts_Rt_th(vertices[0], rotation.to(device),
                                translation.to(device))[None]
     vc_predictions_ref, _, _ = vc_renderer(points=[vertices,
                                                    faces.long()],
                                            camera_params=camera_params,
                                            colors_bxpx3=xyzs)
+    points_ref = points_from_depth_uv_torch_mat(vc_predictions_ref[0, :, :, 2],
+                                                K)
 
-    # predictions_ref: torch.Size([1, 480, 640, 3]), torch.float32, cuda0
-    # silhouete_ref: torch.Size([1, 480, 640, 1]), torch.float32, cuda0
-    predictions_ref = torch.from_numpy(
-        (color_im[None] / 255.0).astype(np.float32)).to(device)
-    silhouete_ref = torch.from_numpy(
-        (mask_im[None]).astype(np.float32)).to(device)
-    points_ref = torch.from_numpy((ref_points).astype(np.float32)).to(device)
+    # Reference Images from Real
+    # from PIL import Image
+    # color_im = Image.open('./dataset/rgb/0.jpg')
+    # depth_im = Image.open('./dataset/depth/0.png')
+    # mask_im = Image.open('./dataset/mask/0.png')
+    # mask_im = (np.array(mask_im) / 255)[:, :, None]
+    # color_im = np.array(color_im) * mask_im
+    # depth_im = np.array(depth_im) * mask_im[:, :, 0] / 1000.0  # [mm] -> [m]
+    # predictions_ref = torch.from_numpy(
+    #     (color_im[None] / 255.0).astype(np.float32)).to(device)
+    # silhouete_ref = torch.from_numpy(
+    #     (mask_im[None]).astype(np.float32)).to(device)
+    # points_ref = torch.from_numpy((ref_points).astype(np.float32)).to(device)
+
     # Show Reference RGB and Silhuette Image
     # silhouete_np = silhouete_ref.cpu().numpy()[0]
     # predictions_np = predictions_ref.cpu().numpy()[0]
-    depth_np = vc_predictions_ref[:, :, :, 2].cpu().numpy()[0]
+    # depth_np = vc_predictions_ref[:, :, :, 2].cpu().numpy()[0]
 
-    # import pdb
-    # pdb.set_trace()
-
-    plt.figure(figsize=(10, 10))
-    plt.subplot(1, 2, 1)
-    # plt.imshow(silhouete_np[..., 0])
-    plt.imshow(depth_im)
-    plt.grid(False)
-    plt.subplot(1, 2, 2)
-    # plt.imshow(predictions_np)
-    plt.imshow(depth_np)
-    plt.grid(False)
-    plt.show()
+    # Plot reference images
+    # plt.figure(figsize=(10, 10))
+    # plt.subplot(1, 2, 1)
+    # # plt.imshow(silhouete_np[..., 0])
+    # plt.imshow(depth_im)
+    # plt.grid(False)
+    # plt.subplot(1, 2, 2)
+    # # plt.imshow(predictions_np)
+    # plt.imshow(depth_np)
+    # plt.grid(False)
+    # plt.show()
 
     # GIF Creation Setting
     filename_output = "./bottle_optimization_demo.gif"
     writer = imageio.get_writer(filename_output, mode='I', duration=0.3)
 
+    # TODO(taku): simplify more,
     class Model(nn.Module):
         def __init__(self, renderer, depth_renderer, image_ref, sil_ref,
                      points_ref, device, verticesc, facesc, uvc, texturec,
@@ -562,22 +439,26 @@ def main():
             self.depth_renderer = depth_renderer
             self.device = device
 
-            # Get the reference silhouette and RGB image
+            # Get the reference silhouette and RGB image, points
             self.register_buffer('image_ref', image_ref)
             self.register_buffer('sil_ref', sil_ref)
             self.register_buffer('points_ref', points_ref)
 
-            # Initiale position parameter
+            # Initiale pose parameter
+            # quaternion
             quat = kornia.angle_axis_to_quaternion(
-                torch.tensor([1.0, 0.2, 1.0], dtype=torch.float))
+                torch.tensor([0.0, 0.0, 1.0], dtype=torch.float))
             self.camera_quat = nn.Parameter(
                 torch.from_numpy(
                     np.array([[quat[0], quat[1], quat[2], quat[3]]],
                              dtype=np.float32)).to(device))
+            # trans z
+            # self.camera_trans_axis = nn.Parameter(
+            #     torch.tensor([0.8], dtype=torch.float).to(device))
+            self.camera_trans_axis = torch.tensor([0.8],
+                                                  dtype=torch.float).to(device)
 
-            self.camera_trans_axis = nn.Parameter(
-                torch.tensor([0.8], dtype=torch.float).to(device))
-
+            # Camera Param
             camera_proj_mat_np = np.array([[fx / cx], [fy / cy], [-1]],
                                           dtype=np.float32)
             self.camera_proj_mat = torch.from_numpy(camera_proj_mat_np).to(
@@ -593,8 +474,6 @@ def main():
             self.tfshi = tfshic
 
         def forward(self):
-            # camera_r_param, camera_t_param = make_camera_mat_from_quat_uv(
-            #     self.camera_quat, self.camera_trans_axis, ux, vy)
             camera_r_param, camera_t_param = make_camera_mat_from_quat_uv(
                 self.camera_quat, self.camera_trans_axis, ux, vy, cx, cy, fx,
                 fy)
@@ -603,6 +482,7 @@ def main():
                 camera_t_param[None].to(self.device), self.camera_proj_mat
             ]
 
+            # Visual Alignment
             if args.use_texture:
                 predictions, silhouette, _ = self.renderer(
                     points=[self.vertices, self.faces.long()],
@@ -618,56 +498,57 @@ def main():
                     camera_params=camera_params,
                     colors_bxpx3=colors)
 
+            # Geometric Alignment
             rotation_xyz = kornia.quaternion_to_rotation_matrix(
                 self.camera_quat)
             trans_xyz = calc_trans_from_zuv(self.camera_trans_axis, ux, vy, cx,
                                             cy, fx, fy)
-            # import pdb
-            # pdb.set_trace()
             xyzs = transform_pts_Rt_th(self.vertices[0], rotation_xyz[0],
                                        trans_xyz[:, 0])[None]
             depth_predictions, _, _ = self.depth_renderer(
                 points=[vertices, faces.long()],
                 camera_params=camera_params,
                 colors_bxpx3=xyzs)
-
-            # pre_points = points_from_depth_uv_torch(
-            #     depth_predictions[0, :, :, 2], K)
             pre_points = points_from_depth_uv_torch_mat(
                 depth_predictions[0, :, :, 2], K)
-            # import pdb
-            # pdb.set_trace()
 
             # Calculate the silhouette loss
-            loss = 0
+            # loss = 0
             # loss = torch.sum((predictions - self.image_ref)**2)
             # loss += torch.sum((silhouette - self.sil_ref)**2)
+
+            loss = 0
             # loss = torch.mean((predictions - self.image_ref)**2)
+            ssim = kornia.losses.SSIM(5, reduction='none')
+            # loss = ssim(predictions.permute([0, 3, 1, 2]),
+            #             self.image_ref.permute([0, 3, 1, 2])).mean()
+            # bce = nn.BCELoss()
+            # loss += bce(silhouette, self.sil_ref)
             loss += torch.mean((silhouette - self.sil_ref)**2)
             # Chamfer Distance
+            # loss += chamfer.chamfer_distance(self.points_ref[None],
+            #                                  pre_points[None])[0]
+            return loss, predictions, silhouette, depth_predictions[0, :, :, 2]
+            # return loss, predictions, silhouette, None
+            # loss = torch.sum((predictions - self.image_ref)**2)
+            # loss += torch.sum((silhouette - self.sil_ref)**2)
             # https://gist.github.com/WangZixuan/4c4cdf49ce9989175e94524afc946726
             # https://pytorch3d.readthedocs.io/en/latest/_modules/pytorch3d/loss/chamfer.html
             # https://discuss.pytorch.org/t/k-nearest-neighbor-in-pytorch/59695/4
             # https://discuss.pytorch.org/t/how-to-find-k-nearest-neighbor-of-a-tensor/51593
-            # import pdb
-            # pdb.set_trace()
-            # loss += chamfer.chamfer_distance(self.points_ref[None],
-            #                                  pre_points[None])[0]
-            return loss, predictions, silhouette, depth_predictions[0, :, :, 2]
 
     if not args.use_texture:
         uv, texture = None, None
     model = Model(renderer, vc_renderer, predictions_ref, silhouete_ref,
                   points_ref, device, vertices, faces, uv, texture,
                   tflight_bx3, tfmat, tfshi).to(device)
-
     optimizer = torch.optim.Adam(model.parameters(), lr=0.05)
 
     # Show the init and reference RGB image
     _, image_init, silhouette_init, depth_init = model()
     plt.subplot(1, 2, 1)
-    # plt.imshow(image_init.detach().squeeze().cpu().numpy())
-    plt.imshow(depth_init.detach().cpu().numpy())
+    plt.imshow(image_init.detach().squeeze().cpu().numpy())
+    # plt.imshow(depth_init.detach().cpu().numpy())
     # plt.imshow(silhouette_init.detach().squeeze().cpu().numpy())
     plt.grid(False)
     plt.title("Starting position")
@@ -688,7 +569,6 @@ def main():
             optimizer.step()
             loop.set_description('Optimizing (loss %.4f)' % loss.data)
             print(loss)
-            # print(model.camera_trans_axis)
 
         if i % 10 == 0:
             image = pre_img[0].detach().cpu().numpy()
