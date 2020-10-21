@@ -17,6 +17,12 @@ This code requires PyTorch 1.1.0 and python 3+. Please install dependencies by
 ```bash
 pip install -r requirments.txt
 ```
+if chamfer distance install is not available,
+```bash
+git clone git@github.com:takuya-ikeda-tri/pyTorchChamferDistance.git
+mv pyTorchChamferDistance/chamfer_distance ./dib-render/
+```
+
 
 ### Compile the DIB-Render
 ```bash
