@@ -526,8 +526,8 @@ def main():
     rot_xflip = torch.eye(3)
     rot_xflip[1, 1] = torch.tensor(-1)
     rot_xflip[2, 2] = torch.tensor(-1)
-    uloc, vloc = 305.1305, 242.5644
-    # u, v = 400.1305, 400.5644
+    # uloc, vloc = 305.1305, 242.5644
+    uloc, vloc = 400.1305, 300.5644
     uvc = torch.tensor([uloc, vloc, 1.0], dtype=torch.float)
     dis = 0.5
     disvec = torch.tensor([0.0, 0.0, dis], dtype=torch.float)
@@ -672,6 +672,10 @@ def main():
                 torch.from_numpy(np.array([0.0], dtype=np.float32)).to(device))
             self.camera_trans = nn.Parameter(
                 torch.from_numpy(np.array([1.0], dtype=np.float32)).to(device))
+            self.camera_uvc = nn.Parameter(
+                torch.from_numpy(
+                    np.array([390.0, 305.0, 1.0],
+                             dtype=np.float32)).to(device))
 
             # Renderer Setting
             self.vertices = verticesc
@@ -683,18 +687,18 @@ def main():
             self.tfshi = tfshic
 
             # ADD
-            uvc = torch.tensor([uloc, vloc, 1.0], dtype=torch.float).to(device)
-            p = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float).to(device)
-            q = torch.inverse(K) @ uvc
-            self.Rcv = rot_2vector(p, q, device)
             self.rot_xflip = rot_xflip.to(device)
 
         def forward(self):
-            Tco = self.Rcv[:, 2] * self.camera_trans
+            # uvc = torch.tensor([self.camera_u[0], self.camera_, 1.0], dtype=torch.float).to(device)
+            p = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float).to(device)
+            q = torch.inverse(K) @ self.camera_uvc
+            Rcv = rot_2vector(p, q, self.device)
+            Tco = Rcv[:, 2] * self.camera_trans
             Rov = (
                 (rot_y(self.azi, self.device) @ rot_x(-self.ele, self.device))
                 @ rot_z(self.tilt, self.device)) @ self.rot_xflip
-            Rco = self.Rcv @ torch.inverse(Rov)
+            Rco = Rcv @ torch.inverse(Rov)
             mat_co = torch.eye(4).to(self.device)
             mat_co[:3, :3] = Rco
             mat_co[:3, 3] = Tco
