@@ -24,8 +24,8 @@ import tqdm
 import matplotlib.pyplot as plt
 from skimage import img_as_ubyte
 import kornia
-# from pytorch3d.loss import chamfer
-from chamfer_distance import ChamferDistance as chamfer
+from pytorch3d.loss import chamfer
+# from chamfer_distance import ChamferDistance as chamfer
 
 from simple_renderer import Renderer
 ROOT_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -148,9 +148,70 @@ def get_spherical_coords_x(X):
     return np.stack([uu, vv], 1)
 
 
-def compute_camera_params_torch(azimuth, elevation, distance, device):
-    theta = azimuth * np.pi / 180.0
-    phi = elevation * np.pi / 180.0
+def rot_x(theta):
+    r = torch.eye(3)
+    r[1, 1] = torch.cos(theta)
+    r[1, 2] = -torch.sin(theta)
+    r[2, 1] = torch.sin(theta)
+    r[2, 2] = torch.cos(theta)
+    return r
+
+
+def rot_y(phi):
+    r = torch.eye(3)
+    r[0, 0] = torch.cos(phi)
+    r[0, 2] = torch.sin(phi)
+    r[2, 0] = -torch.sin(phi)
+    r[2, 2] = torch.cos(phi)
+    return r
+
+
+def rot_z(psi):
+    r = torch.eye(3)
+    r[0, 0] = torch.cos(psi)
+    r[0, 1] = -torch.sin(psi)
+    r[1, 0] = torch.sin(psi)
+    r[1, 1] = torch.cos(psi)
+    return r
+
+
+def rot_skew(v):
+    r = torch.zeros((3, 3))
+    r[0, 1] = -v[2]
+    r[0, 2] = v[1]
+    r[1, 0] = v[2]
+    r[1, 2] = -v[0]
+    r[2, 0] = -v[1]
+    r[2, 1] = v[0]
+    return r
+
+
+def rot_2vector(v1, v2):
+    eye = torch.eye(3)
+    v_cross = torch.cross(v1, v2)
+    v_mul = v1 @ v2
+    rx = rot_skew(v_cross)
+    result = eye + rx + (rx @ rx) / (1 + v_mul)
+    return result
+
+
+def make_camera_mat_from_mat(mat):
+    mat[0, 3] = -1 * mat[0, 3]
+    conv_mat3 = torch.eye(3)
+    conv_mat3[1, 1] = -1.0
+    conv_mat3[2, 2] = -1.0
+    camera_r_param = conv_mat3 @ mat[:3, :3]
+    tes_conv_matrix2 = torch.eye(4)
+    tes_conv_matrix2[:3, :3] = torch.inverse(camera_r_param)
+    camera_t_param = (tes_conv_matrix2 @ mat)[:3, 3]
+    # test_conv_matrix2 is Roc? camera_t_param is Toc
+    return camera_r_param, camera_t_param
+
+
+def compute_camera_params_torch_no_grad(azimuth, elevation, distance):
+    theta = kornia.constants.pi / 2 - azimuth
+    # theta = azimuth
+    phi = elevation
 
     camY = distance * torch.sin(phi)
     temp = distance * torch.cos(phi)
@@ -159,7 +220,7 @@ def compute_camera_params_torch(azimuth, elevation, distance, device):
     cam_pos = torch.stack([camX, camY, camZ])
 
     axisZ = cam_pos.clone()
-    axisY = torch.tensor([0.0, 1.0, 0.0], requires_grad=True).to(device)
+    axisY = torch.tensor([0.0, 1.0, 0.0])
     axisX = torch.cross(axisY, axisZ)
     axisY = torch.cross(axisZ, axisX)
     cam_mat = torch.stack([axisX, axisY, axisZ])
@@ -167,23 +228,57 @@ def compute_camera_params_torch(azimuth, elevation, distance, device):
     return cam_mat, cam_pos
 
 
-def compute_camera_params_torch_no_grad(azimuth, elevation, distance, device):
-    theta = azimuth * np.pi / 180.0
-    phi = elevation * np.pi / 180.0
+import json
+with open('./dataset/camera.json') as json_file:
+    camera_json = json.load(json_file)
+cx = camera_json['cx']
+cy = camera_json['cy']
+fx = camera_json['fx']
+fy = camera_json['fy']
+K = np.eye(3, dtype=np.float)
+K[0, 0] = fx
+K[1, 1] = fy
+K[0, 2] = cx
+K[1, 2] = cy
+K = torch.from_numpy(K)
 
-    camY = distance * torch.sin(phi)
-    temp = distance * torch.cos(phi)
-    camX = temp * torch.cos(theta)
-    camZ = temp * torch.sin(theta)
-    cam_pos = torch.stack([camX, camY, camZ])
+azi = torch.tensor(0.1, dtype=torch.float)
+ele = torch.tensor(0.1, dtype=torch.float)
+til = torch.tensor(0.0, dtype=torch.float)
+# pi = torch.tensor(np.pi, dtype=torch.float)
+rot_xflip = torch.eye(3)
+rot_xflip[1, 1] = torch.tensor(-1)
+rot_xflip[2, 2] = torch.tensor(-1)
+u, v = 305.1305, 242.5644
+# u, v = 315.1305, 242.5644
+uvc = torch.tensor([u, v, 1.0], dtype=torch.float)
+dis = 1
+disvec = torch.tensor([0.0, 0.0, dis], dtype=torch.float)
+p = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float)
+K = K.type_as(uvc)
+q = torch.inverse(K) @ uvc
+Rcv = rot_2vector(p, q)
+Tco = Rcv @ disvec
+# azi is minus?
+Rov = ((rot_y(azi) @ rot_x(-ele)) @ rot_z(til)) @ rot_xflip
+Rco = Rcv @ torch.inverse(Rov)
 
-    axisZ = cam_pos.clone()
-    axisY = torch.tensor([0.0, 1.0, 0.0]).to(device)
-    axisX = torch.cross(axisY, axisZ)
-    axisY = torch.cross(axisZ, axisX)
-    cam_mat = torch.stack([axisX, axisY, axisZ])
-    cam_mat = F.normalize(cam_mat)
-    return cam_mat, cam_pos
+mat_co = torch.eye(4)
+mat_co[:3, :3] = Rco
+mat_co[:3, 3] = Tco
+cam_rot, cam_trans = make_camera_mat_from_mat(mat_co)
+
+# import pdb
+# pdb.set_trace()
+cam_rot1, cam_trans1 = compute_camera_params_torch_no_grad(azi, ele, dis)
+
+# TODO(taku): possibly
+# Rov = ((rot_y(azi) @ rot_x(-ele)) @ rot_z(til))
+# cam_rot2 = Rov @ torch.inverse(Rcv)
+# Tco[0] = -1 * Tco[0]
+# cam_trans2 = cam_rot2 @ Tco
+# import pdb
+# pdb.set_trace()
 
 
 def set_seed(seed: int = 666):
@@ -298,6 +393,7 @@ def main():
         tes_conv_matrix2 = torch.eye(4)
         tes_conv_matrix2[:3, :3] = torch.inverse(camera_r_param)
         camera_t_param = (tes_conv_matrix2 @ mat)[:3, 3]
+        # test_conv_matrix2 is Roc? camera_t_param is Toc
         return camera_r_param, camera_t_param
 
     def calc_trans_from_zuv(transz, ux, vy, cx, cy, fx, fy):
@@ -535,9 +631,8 @@ def main():
             #     fy)
 
             camera_r_param, camera_t_param = compute_camera_params_torch(
-                self.camera_position_plane[0],
-                self.camera_position_plane[1], self.camera_position_plane[2],
-                self.device)
+                self.camera_position_plane[0], self.camera_position_plane[1],
+                self.camera_position_plane[2], self.device)
 
             camera_params = [
                 camera_r_param[None].to(self.device),
