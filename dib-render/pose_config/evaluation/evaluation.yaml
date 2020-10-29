@@ -1,0 +1,4 @@
+evaluation:
+  device: 'cuda'
+  metric_title: 'PureSyntheticOnBlueRedCanYCB' 
+  metric_resolution: 1000

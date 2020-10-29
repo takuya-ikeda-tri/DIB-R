@@ -1,0 +1,4 @@
+data:
+  split_ratio: 0.1
+  batch_size: 2
+  num_workers: 4

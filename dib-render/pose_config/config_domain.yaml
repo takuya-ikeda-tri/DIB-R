@@ -1,0 +1,24 @@
+general:
+  checkpoint: ''
+  ann_path: domainA_dataset/domainA.json
+  model_path: domainA_dataset/models.yaml
+  # ann_path: domainB_dataset/domainB.json
+  # model_path: domainB_dataset/models.yaml
+  # data.split_ratio=0.1 general.checkpoint=./outputs/2020-10-27/11-41-20/_ckpt_epoch_60.ckpt 
+  # python3 train_object_pose_estimation_center_hydra_for_selfsupervised.py data.split_ratio=0.1 general.checkpoint=./outputs/2020-10-27/11-41-20/_ckpt_epoch_60.ckpt data.batch_size=1
+  model_scale: 1.0  # 0.001
+  eval_targets: ['bottle']  # please set target keys which is included in models.yaml
+  class_num: 2  # background + target class
+  max_instance_num: 1  # the number of instance
+  class_labels: ['background', 'bottle']
+  file_path: saved_models/
+
+defaults:
+  - trainer: trainer
+  - data: data
+  - training: training
+  - validation: validation
+  - evaluation: evaluation
+  - wandb: wandb
+  
+

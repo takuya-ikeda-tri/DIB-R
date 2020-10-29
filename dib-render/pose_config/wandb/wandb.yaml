@@ -1,0 +1,4 @@
+wandb:
+  use_wandb: True
+  project_dir: lightning_logs
+
