@@ -30,6 +30,7 @@ import kornia
 from simple_renderer import Renderer
 ROOT_DIR = os.path.abspath(os.path.dirname(__file__))
 import BPnP
+from pytorch3d.loss import chamfer
 
 ###########################
 # Settings
@@ -297,18 +298,24 @@ class Model(nn.Module):
         #     camera_params=camera_params,
         #     colors_bxpx3=colors)
 
+        # TODO(taku): extract silhouette info too, and delete the above
         # Geometric Alignment
-        # xyzs = transform_pts_Rt_th(self.vertices[0],
-        #                            rotation.to(self.device),
-        #                            translation.to(self.device))[None]
-        # depth_predictions, _, _ = self.depth_renderer(
-        #     points=[vertices, faces.long()],
-        #     camera_params=camera_params,
-        #     colors_bxpx3=xyzs)
+        xyzs = transform_pts_Rt_th(self.vertices[0], rotation.to(self.device),
+                                   translation.to(self.device))[None]
+        depth_predictions, _, _ = self.depth_renderer(
+            points=[self.vertices, self.faces.long()],
+            camera_params=camera_params,
+            colors_bxpx3=xyzs)
+        pre_points = points_from_depth_uv_torch_mat(
+            depth_predictions[0, :, :, 2], self.K)
 
         loss = 0
         loss += torch.mean((predictions - self.image_ref)**2)
         loss += torch.mean((silhouette - self.sil_ref)**2)
+        # Chamfer Distance
+        loss += chamfer.chamfer_distance(self.points_ref[None],
+                                         pre_points[None])[0]
+
         return loss, predictions, silhouette, None
         # return loss, predictions, silhouette, depth_predictions[0, :, :, 2]
 
