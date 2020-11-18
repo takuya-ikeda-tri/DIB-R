@@ -1,7 +1,9 @@
 import torch
 import torch.utils.data as torch_data
 import pytorch_lightning as pl
-# import torchvision.transform as T
+import torchvision.transforms as T
+import torchvision.transforms.functional as TF
+from torchvision import transforms
 import numpy as np
 from PIL import Image
 from simple_renderer import Renderer
@@ -114,10 +116,10 @@ def allocentric_to_mat(azi, ele, til, ux, vy, dis, K):
     return mat_co, Rco, Tco
 
 
-# def build_transform(is_training):
-#     transforms = []
-#     transforms.append(T.ToTensor())
-#     return T.Compose(transforms)
+def build_transform(is_training):
+    transforms = []
+    transforms.append(T.ToTensor())
+    return T.Compose(transforms)
 
 
 def make_camera_mat_from_mat(mat, device='cpu'):
@@ -133,6 +135,37 @@ def make_camera_mat_from_mat(mat, device='cpu'):
     return camera_r_param, camera_t_param
 
 
+class P2PDataset(torch_data.Dataset):
+    def __init__(self, transform, img_num=1000, device='cuda'):
+        self.img_num = img_num
+        self.transform = transform
+
+    def __len__(self):
+        return self.img_num
+
+    def read_data(self, idx):
+        img = np.array(
+            Image.open(
+                './pix2pose_data/rgb/{}.png'.format(idx)).convert("RGB"))
+        nocs = np.array(
+            Image.open(
+                './pix2pose_data/nocs/{}.png'.format(idx)).convert("RGB"))
+        pose = np.load('./pix2pose_data/pose/{}.npy'.format(idx))
+        return img, nocs, pose
+
+    def __getitem__(self, idx):
+        img, nocs, pose = self.read_data(idx)
+        target = {}
+        # TODO(taku): please check it
+        target['nocs'] = TF.to_tensor(nocs)
+        target['pose'] = torch.from_numpy(pose)
+
+        if self.transform is not None:
+            img = self.transform(img)
+        return img, target
+
+
+'''
 class P2PDataset(torch_data.Dataset):
     def __init__(self, img_ids=1000, device='cuda'):
         pointnp_px3, facenp_fx3, uv = loadobjtex(params['obj_path'])
@@ -221,7 +254,7 @@ class P2PDataset(torch_data.Dataset):
         azi = torch.rand(1, dtype=torch.float)[0] * 3.14 * 2
         ele = torch.rand(1, dtype=torch.float)[0] * 3.14 * 2
         til = torch.rand(1, dtype=torch.float)[0] * 3.14 * 2
-        uloc, vloc = self.K[0, 2], self.K[1, 2]
+        uloc, vloc = params['width'] / 2.0, params['height'] / 2.0
         mat_co, rotation, translation = allocentric_to_mat(
             azi, ele, til, uloc, vloc, dis, self.K)
         cam_rot, cam_trans = make_camera_mat_from_mat(mat_co)
@@ -230,7 +263,7 @@ class P2PDataset(torch_data.Dataset):
         camera_params.append(cam_trans[None].to(device))
         camera_params.append(self.camera_proj)
         return camera_params, mat_co
-
+'''
 
 # class P2PDataModule(pl.LightningDataModule):
 #     def __init__(self):
@@ -242,15 +275,37 @@ def ten2num(input_tensor, ttype=torch.FloatTensor):
 
 
 if __name__ == "__main__":
-    dataset = P2PDataset()
+    transform = build_transform(True)
+    dataset = P2PDataset(transform)
+    # dataloader = torch_data.DataLoader(dataset, batch_size=2)
+
     dataloader = torch_data.DataLoader(dataset, batch_size=1)
+    # for i in range(1000):
+    #     image, target = next(iter(dataloader))
+    #     image = transforms.ToPILImage()(image[0].cpu()).convert("RGB")
+    #     nocs = transforms.ToPILImage()(target['nocs'][0].cpu()).convert("RGB")
+    #     pose = ten2num(target['pose'])
+    #     np.save('./pix2pose_data/pose/{}.npy'.format(i), pose)
+    #     image.save('./pix2pose_data/rgb/{}.png'.format(i))
+    #     nocs.save('./pix2pose_data/nocs/{}.png'.format(i))
+
     batch = next(iter(dataloader))
     image, target = batch
+    # import pdb
+    # pdb.set_trace()
     import matplotlib.pyplot as plt
     plt.imshow(ten2num(image[0].permute(1, 2, 0)))
     plt.show()
     plt.imshow(ten2num(target['nocs'][0].permute(1, 2, 0)))
     plt.show()
-    plt.imshow(ten2num(target['nocs_mask'][0, 0]))
-    plt.show()
-    print(target['pose'])
+    # plt.imshow(ten2num(target['nocs_mask'][0, 0]))
+    # plt.show()
+
+    # plt.imshow(ten2num(image[1].permute(1, 2, 0)))
+    # plt.show()
+    # plt.imshow(ten2num(target['nocs'][1].permute(1, 2, 0)))
+    # plt.show()
+    # plt.imshow(ten2num(target['nocs_mask'][1, 0]))
+    # plt.show()
+    print(target['pose'][0])
+    # print(target['pose'][1])

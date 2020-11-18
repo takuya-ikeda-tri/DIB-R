@@ -3,17 +3,78 @@ from pytorch_lightning import seed_everything
 import torch
 from torch.nn import functional as F
 import torch.nn as nn
+from torch.utils.data import DataLoader
+
+import datetime
+import numpy as np
+import wandb
+from pytorch_lightning.loggers import WandbLogger
+
+from pix2pose_dataset import P2PDataset
+from pix2pose_dataset import build_transform
+from pix2pose_dataset import loadobjtex
+from utils.image_utils import solve_pnp
 
 params = {
+    'obj_path': './obj_000001.obj',
+    'height': 128,
+    'width': 128,
     'input_size': 128,
-    'checkpoint': '',
-    'file_path': 'saved_models/',
+    'checkpoint': "./lightning_logs/epoch=80.ckpt",
+    'file_path': 'test',
+    'batch_size': 4,
+    'num_workers': 8,
+    'split_ratio': 0.05,
+    'vert_max': 0.1048,
+    'vert_min': -0.1048
 }
+
+
+def denorm():
+    pointnp_px3, facenp_fx3, uv = loadobjtex(params['obj_path'])
+    vertices = torch.from_numpy(pointnp_px3)
+    vertices = vertices.unsqueeze(0)
+    vert_min = torch.min(vertices)
+    vert_max = torch.max(vertices)
+    # colors = (self.vertices - vert_min) / (vert_max - vert_min)
+    return vert_max, vert_min  # (tensor(0.1048), tensor(-0.1048))
 
 
 class P2PDataModule(pl.LightningDataModule):
     def __init__(self):
         super().__init__()
+        self.dataset = P2PDataset
+
+    def setup(self, stage):
+        train_transform = build_transform(True)
+        val_transform = build_transform(False)
+        if stage == 'fit':
+            train_data = self.dataset(train_transform)
+            val_data = self.dataset(val_transform)
+            indices = torch.randperm(len(train_data)).tolist()
+            split_th = int(len(train_data) * params['split_ratio'])
+            self.train_data = torch.utils.data.Subset(train_data,
+                                                      indices[:-split_th])
+            self.val_data = torch.utils.data.Subset(val_data,
+                                                    indices[-split_th:])
+        if stage == 'test':
+            pass
+
+    def train_dataloader(self):
+        train_data = DataLoader(self.train_data,
+                                batch_size=params['batch_size'],
+                                shuffle=True,
+                                num_workers=params['num_workers'],
+                                drop_last=True)
+        return train_data
+
+    def val_dataloader(self):
+        val_data = DataLoader(self.val_data,
+                              batch_size=1,
+                              shuffle=False,
+                              num_workers=params['num_workers'],
+                              drop_last=True)
+        return val_data
 
 
 # TODO(taku): refactor this model following
@@ -201,39 +262,60 @@ class Generator(nn.Module):
         return torch.tanh(nocs), torch.sigmoid(prob)
 
 
+def ten2num(input_tensor, ttype=torch.FloatTensor):
+    return input_tensor.type(ttype).numpy()
+
+
 class GAN(pl.LightningModule):
     def __init__(self):
         super().__init__()
         self.generator = Generator()
         self.discriminator = Discriminator()
+        self.K = np.eye(3).astype(np.float32)
+        self.K[0, 0] = 200.0
+        self.K[1, 1] = 200.0
+        self.K[0, 2] = params['width'] / 2.0
+        self.K[1, 2] = params['height'] / 2.0
 
     def forward(self, x):
         return self.generator(x)
 
     def generator_loss(self, batch, alpha=3, beta=50):
         images, targets = batch
-        gan_label = torch.ones(images.size(0), 1, self.device)
-        nocs, prob = self.generator(batch)
+        gan_label = torch.ones((images.size(0), 1), device=self.device)
+        nocs, prob = self.generator(images)
         gan_result = self.discriminator(nocs)
-        mask = torch.zeros((nocs.shape))
-        mask[torch.nonzero(nocs)] = 1
-        mask = mask[:, 0, :, :]
-        loss_nocs = torch.sum(torch.abs(nocs - targets['nocs'], 1))
-        loss_prob = F.mse_loss(prob[:, 0, :, :], torch.min(loss_nocs, 1))
+        mask = torch.zeros((nocs.shape[0], nocs.shape[2], nocs.shape[3]),
+                           device=self.device)
+        # mask[torch.sum(nocs, 1) != 0] = 1
+        mask[torch.sum(targets['nocs'], 1) != 0] = 1
+
+        loss_nocs = torch.sum(torch.abs(nocs - targets['nocs']), 1)
+        # TODO(taku): have to divide the loss_nocs // 3.0??
+        # loss_prob = F.mse_loss(prob[:, 0, :, :], torch.min(loss_nocs, 1))
+        min_loss_nocs = loss_nocs.clone()
+        min_loss_nocs[loss_nocs > 1] = 1.0
+        loss_prob = F.mse_loss(prob[:, 0, :, :], min_loss_nocs)
         loss_nocs = torch.mean(loss_nocs * mask * alpha + loss_nocs *
                                (1 - mask)) * 100
-        loss_gen = F.binary_cross_entropy(gan_result, gan_label)
+        # loss_gen = F.binary_cross_entropy(gan_result,
+        #                                   gan_label.type_as(gan_result))
+        loss_gen = F.binary_cross_entropy_with_logits(gan_result, gan_label)
         loss = loss_gen + beta * loss_prob + loss_nocs
         return loss
 
     def discriminator_loss(self, batch):
         images, targets = batch
-        gan_label_real = torch.ones(images.size(0), 1, device=self.device)
-        gan_label_fake = torch.zeros(images.size(0), 1, device=self.device)
+        gan_label_real = torch.ones((images.size(0), 1), device=self.device)
+        gan_label_fake = torch.zeros((images.size(0), 1), device=self.device)
         output_real = self.discriminator(images)
-        loss_real = F.binary_cross_entropy(output_real, gan_label_real)
-        output_fake = self.discriminator(self.generator(images))
-        loss_fake = F.binary_cross_entropy(output_fake, gan_label_fake)
+        # loss_real = F.binary_cross_entropy(output_real, gan_label_real)
+        loss_real = F.binary_cross_entropy_with_logits(output_real,
+                                                       gan_label_real)
+        output_fake = self.discriminator(self.generator(images)[0])
+        # loss_fake = F.binary_cross_entropy(output_fake, gan_label_fake)
+        loss_fake = F.binary_cross_entropy_with_logits(output_fake,
+                                                       gan_label_fake)
         loss = loss_real + loss_fake
         return loss
 
@@ -244,6 +326,126 @@ class GAN(pl.LightningModule):
         if optimizer_idx == 1:
             result = self.discriminator_step(batch)
         return result
+
+    def get_kpt(self, prob, nocs):
+        pass
+
+    def validation_step(self, batch, batch_idx):
+        images, targets = batch
+        # First iteration
+        nocs, prob = self.generator(images)
+        mask = torch.zeros(nocs[:, 0, :, :].shape).type_as(prob)
+        mask_th = 0.5
+        mask[torch.sum(nocs, dim=1) > mask_th] = 1
+        prob = prob * mask[None]
+        prob_mask = torch.zeros(nocs[:, 0, :, :].shape).type_as(prob)
+        # prob_th = 0.1
+        prob_th = 0.1
+        prob_mask[(0 < prob[:, 0]) & (prob_th > prob[:, 0])] = 1
+        # nocs = nocs * mask[None] * prob_mask[None]
+        nocs = nocs * prob_mask[None]
+
+        # Second itreation
+        # images = images * prob_mask[None]
+        # nocs, prob = self.generator(images)
+        # mask = torch.zeros(nocs[:, 0, :, :].shape).type_as(prob)
+        # mask_th = 0.5
+        # mask[torch.sum(nocs, dim=1) > mask_th] = 1
+        # prob = prob * mask[None]
+        # prob_mask = torch.zeros(nocs[:, 0, :, :].shape).type_as(prob)
+        # # prob_th = 0.1
+        # prob_th = 0.1
+        # prob_mask[(0 < prob[:, 0]) & (prob_th > prob[:, 0])] = 1
+        # # nocs = nocs * mask[None] * prob_mask[None]
+        # nocs = nocs * prob_mask[None]
+
+        kpt2d = nocs[0, 0].nonzero()
+        kpt3d = nocs[0, :, kpt2d[:, 0], kpt2d[:, 1]].permute(1, 0)
+        # colors = (self.vertices - vert_min) / (vert_max - vert_min)
+        kpt3d = kpt3d * (params['vert_max'] - params['vert_min']) + \
+            params['vert_min']
+        kpt2d = kpt2d[:, [1, 0]]
+
+        xmax = torch.max(kpt3d[:, 0])
+        xmin = torch.min(kpt3d[:, 0])
+        ymax = torch.max(kpt3d[:, 1])
+        ymin = torch.min(kpt3d[:, 1])
+        zmax = torch.max(kpt3d[:, 2])
+        zmin = torch.min(kpt3d[:, 2])
+
+        xmax_coord = kpt2d[torch.argmax(kpt3d[:, 0])]
+        xmin_coord = kpt2d[torch.argmin(kpt3d[:, 0])]
+        ymax_coord = kpt2d[torch.argmax(kpt3d[:, 1])]
+        ymin_coord = kpt2d[torch.argmin(kpt3d[:, 1])]
+        zmax_coord = kpt2d[torch.argmax(kpt3d[:, 2])]
+        zmin_coord = kpt2d[torch.argmin(kpt3d[:, 2])]
+        coord_list = [
+            xmax_coord[None], xmin_coord[None], ymax_coord[None],
+            ymin_coord[None], zmax_coord[None], zmin_coord[None]
+        ]
+        coord_2d = torch.cat(coord_list, dim=0)
+
+        xmax_xyz = kpt3d[torch.argmax(kpt3d[:, 0])]
+        xmin_xyz = kpt3d[torch.argmin(kpt3d[:, 0])]
+        ymax_xyz = kpt3d[torch.argmax(kpt3d[:, 1])]
+        ymin_xyz = kpt3d[torch.argmin(kpt3d[:, 1])]
+        zmax_xyz = kpt3d[torch.argmax(kpt3d[:, 2])]
+        zmin_xyz = kpt3d[torch.argmin(kpt3d[:, 2])]
+        xyz_list = [
+            xmax_xyz[None], xmin_xyz[None], ymax_xyz[None], ymin_xyz[None],
+            zmax_xyz[None], zmin_xyz[None]
+        ]
+        xyz_3d = torch.cat(xyz_list)
+        result1 = solve_pnp(ten2num(xyz_3d), ten2num(coord_2d), self.K)
+        result2 = solve_pnp(ten2num(kpt3d), ten2num(kpt2d), self.K)
+
+        # nocs[:,0] -> x axis, nocs[:,1] -> y axis, nocs[:,2] -> z axis
+
+        # result = solve_pnp(
+        #     ten2num(kpt3d)[:, [2, 1, 0]], ten2num(kpt2d), self.K)
+        # result = solve_pnp(ten2num(kpt3d), ten2num(kpt2d), self.K)
+        # result = solve_pnp(ten2num(kpt3d), ten2num(kpt2d)[:, [1, 0]], self.K)
+        # result = solve_pnp(
+        #     ten2num(kpt3d)[:, [2, 1, 0]],
+        #     ten2num(kpt2d)[:, [1, 0]], self.K)
+
+        # nocs = nocs * mask[None]
+        # topk = torch.topk(prob[prob != 0], k=100, dim=0, largest=False)
+        # import pdb
+        # pdb.set_trace()
+
+        # ten2num(prob)
+
+        # idx = torch.topk(prob[prob != 0], k=100, dim=0)[1]
+        # prob[prob != 0].scatter_(0, )
+
+        # idx = torch.topk(prob[0], k=2)
+        # prob[0].scatter_(0, idx, prob.shape[2] * prob.shape[3])
+
+        if batch_idx in [0, 1, 2]:
+            self.logger.experiment.log({
+                f"image{self.trainer.global_step}_{batch_idx}": [
+                    wandb.Image(images[0]),
+                    wandb.Image(targets['nocs'][0]),
+                    wandb.Image(mask),
+                    wandb.Image(nocs[0]),
+                    wandb.Image(prob[0])
+                ]
+            })
+            # self.logger.experiment.log({
+            #     f"image{self.trainer.global_step}_{batch_idx}": [
+            #         wandb.Image(images[0]),
+            #         wandb.Image(targets['nocs'][0]),
+            #         wandb.Image(nocs[0, 0]),
+            #         wandb.Image(nocs[0, 1]),
+            #         wandb.Image(nocs[0, 2])
+            #     ]
+            # })
+            print("max-min", xmax, xmin, ymax, ymin, zmax, zmin)
+            print("max-min-coord", xmax_coord, xmin_coord, ymax_coord,
+                  ymin_coord, zmax_coord, zmin_coord)
+            import pdb
+            pdb.set_trace()
 
     def generator_step(self, batch):
         g_loss = self.generator_loss(batch)
@@ -263,7 +465,7 @@ class GAN(pl.LightningModule):
 
 
 def run_model():
-    seed_everything(42)
+    seed_everything(777)
 
     if params['checkpoint'] == '':
         model = GAN()
@@ -274,13 +476,23 @@ def run_model():
         checkpoint = torch.load(params['checkpoint'])
         model.load_state_dict(checkpoint['state_dict'])
 
-    checkpointer = pl.callbacks.ModelCheckpoint(filepath=params['file_path'])
+    checkpointer = pl.callbacks.ModelCheckpoint(dirpath='lightning_logs')
+    # checkpointer = pl.callbacks.ModelCheckpoint(filepath=params['file_path'])
+    # trainer = pl.Trainer(checkpoint_callback=checkpointer,
+    #                      gpus='0',
+    #                      precision=16,
+    #                      max_epochs=100)
+
+    log_name = str(datetime.datetime.now())
+    wandb_logger = WandbLogger(name=log_name, project='lightning_logs')
     trainer = pl.Trainer(checkpoint_callback=checkpointer,
-                         gpus=1,
+                         logger=wandb_logger,
+                         gpus='0',
                          precision=16,
                          max_epochs=100)
-    # dm = P2PDataModule()
-    # trainer.fit(model, dm)
+
+    dm = P2PDataModule()
+    trainer.fit(model, dm)
 
 
 if __name__ == "__main__":
