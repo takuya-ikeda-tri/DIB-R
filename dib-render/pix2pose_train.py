@@ -14,6 +14,7 @@ from pix2pose_dataset import P2PDataset
 from pix2pose_dataset import build_transform
 from pix2pose_dataset import loadobjtex
 from utils.image_utils import solve_pnp
+from utils.object_pose_estimation_center_utils import draw_keypoints
 
 params = {
     'obj_path': './obj_000001.obj',
@@ -29,6 +30,24 @@ params = {
     'vert_min': -0.1048
 }
 
+KPT_3D = np.array([[-0.0334153, -0.0334686, -0.104798],
+                   [-0.0334153, -0.0334686, 0.104798],
+                   [-0.0334153, 0.0334686, -0.104798],
+                   [-0.0334153, 0.0334686, 0.104798],
+                   [0.0334153, -0.0334686, -0.104798],
+                   [0.0334153, -0.0334686, 0.104798],
+                   [0.0334153, 0.0334686, -0.104798],
+                   [0.0334153, 0.0334686, 0.104798]])
+
+# KPT_3D = np.array([[-0.0334153, -0.0334686, -0.104798],
+#                    [-0.0334153, -0.0334686, 0.104798],
+#                    [-0.0334153, 0.0334686, -0.104798],
+#                    [-0.0334153, 0.0334686, 0.104798],
+#                    [0.0334153, -0.0334686, -0.104798],
+#                    [0.0334153, -0.0334686, 0.104798],
+#                    [0.0334153, 0.0334686, -0.104798],
+#                    [0.0334153, 0.0334686, 0.104798], [0., 0., 0.]])
+
 
 def denorm():
     pointnp_px3, facenp_fx3, uv = loadobjtex(params['obj_path'])
@@ -38,6 +57,13 @@ def denorm():
     vert_max = torch.max(vertices)
     # colors = (self.vertices - vert_min) / (vert_max - vert_min)
     return vert_max, vert_min  # (tensor(0.1048), tensor(-0.1048))
+
+
+def project(points_3d, intrinsics, pose):
+    points_3d = np.dot(points_3d, pose[:, :3].T) + pose[:, 3:].T
+    points_3d = np.dot(points_3d, intrinsics.T)
+    points_2d = points_3d[:, :2] / points_3d[:, 2:]
+    return points_2d
 
 
 class P2PDataModule(pl.LightningDataModule):
@@ -398,6 +424,8 @@ class GAN(pl.LightningModule):
         xyz_3d = torch.cat(xyz_list)
         result1 = solve_pnp(ten2num(xyz_3d), ten2num(coord_2d), self.K)
         result2 = solve_pnp(ten2num(kpt3d), ten2num(kpt2d), self.K)
+        projected_kpt = project(KPT_3D, self.K, result2)
+        image = draw_keypoints(images[0], projected_kpt[None].astype(np.int))
 
         # nocs[:,0] -> x axis, nocs[:,1] -> y axis, nocs[:,2] -> z axis
 
@@ -422,10 +450,11 @@ class GAN(pl.LightningModule):
         # idx = torch.topk(prob[0], k=2)
         # prob[0].scatter_(0, idx, prob.shape[2] * prob.shape[3])
 
-        if batch_idx in [0, 1, 2]:
+        if batch_idx in [0, 1, 2, 3, 4, 5]:
             self.logger.experiment.log({
                 f"image{self.trainer.global_step}_{batch_idx}": [
-                    wandb.Image(images[0]),
+                    # wandb.Image(images[0]),
+                    wandb.Image(image),
                     wandb.Image(targets['nocs'][0]),
                     wandb.Image(mask),
                     wandb.Image(nocs[0]),
@@ -444,8 +473,8 @@ class GAN(pl.LightningModule):
             print("max-min", xmax, xmin, ymax, ymin, zmax, zmin)
             print("max-min-coord", xmax_coord, xmin_coord, ymax_coord,
                   ymin_coord, zmax_coord, zmin_coord)
-            import pdb
-            pdb.set_trace()
+            # import pdb
+            # pdb.set_trace()
 
     def generator_step(self, batch):
         g_loss = self.generator_loss(batch)
