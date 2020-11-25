@@ -15,13 +15,16 @@ from pix2pose_dataset import build_transform
 from pix2pose_dataset import loadobjtex
 from utils.image_utils import solve_pnp
 from utils.object_pose_estimation_center_utils import draw_keypoints
+import BPnP
+import kornia
 
 params = {
     'obj_path': './obj_000001.obj',
     'height': 128,
     'width': 128,
     'input_size': 128,
-    'checkpoint': "./lightning_logs/epoch=80.ckpt",
+    'checkpoint': "./lightning_logs/epoch=99-v0.ckpt",
+    # 'checkpoint': '',
     'file_path': 'test',
     'batch_size': 4,
     'num_workers': 8,
@@ -49,6 +52,13 @@ KPT_3D = np.array([[-0.0334153, -0.0334686, -0.104798],
 #                    [0.0334153, 0.0334686, 0.104798], [0., 0., 0.]])
 
 
+def angle_axis_to_rotation_matrix(angle_axis):
+    # rotation_matrix = kornia.quaternion_to_rotation_matrix(
+    #     kornia.angle_axis_to_quaternion(angle_axis))
+    rotation_matrix = kornia.angle_axis_to_rotation_matrix(angle_axis)
+    return rotation_matrix
+
+
 def denorm():
     pointnp_px3, facenp_fx3, uv = loadobjtex(params['obj_path'])
     vertices = torch.from_numpy(pointnp_px3)
@@ -57,6 +67,29 @@ def denorm():
     vert_max = torch.max(vertices)
     # colors = (self.vertices - vert_min) / (vert_max - vert_min)
     return vert_max, vert_min  # (tensor(0.1048), tensor(-0.1048))
+
+
+# def load_models_info(models_path, base_path='.', scale=1.0):
+#     """Load mesh model and return vertices as dictionary.
+#     Args:
+#         models_path (str): path of models.yaml
+#         base_path (str, optional): path of base dir. Defaults to '.'.
+#         scale (float, optional): Defaults to 1.0.
+#     Returns:
+#         (dict): {key: vertices}
+#     """
+#     def _get_xyz(model_path):
+#         mesh = o3d.io.read_triangle_mesh(model_path)
+#         return np.asarray(mesh.vertices)
+
+#     with open(models_path) as file:
+#         models = yaml.load(file)
+
+#     model_xyz = {}
+#     for key in models:
+#         model_path = os.path.join(base_path, models[key]['path'])
+#         model_xyz[str(key)] = _get_xyz(model_path) * scale
+#     return model_xyz
 
 
 def project(points_3d, intrinsics, pose):
@@ -303,6 +336,11 @@ class GAN(pl.LightningModule):
         self.K[0, 2] = params['width'] / 2.0
         self.K[1, 2] = params['height'] / 2.0
 
+        self.K = torch.from_numpy(self.K).to(self.device)
+        self.bpnp = BPnP.BPnP.apply
+        pointnp_px3, _, _ = loadobjtex(params['obj_path'])
+        self.point_px3 = torch.from_numpy(pointnp_px3).type_as(self.K)
+
     def forward(self, x):
         return self.generator(x)
 
@@ -328,6 +366,76 @@ class GAN(pl.LightningModule):
         #                                   gan_label.type_as(gan_result))
         loss_gen = F.binary_cross_entropy_with_logits(gan_result, gan_label)
         loss = loss_gen + beta * loss_prob + loss_nocs
+        '''
+        mask = torch.zeros(nocs[:, 0, :, :].shape).type_as(prob)
+        mask_th = 0.5
+        mask[torch.sum(nocs, dim=1) > mask_th] = 1
+        prob = prob * mask[:, None]
+        prob_mask = torch.zeros(nocs[:, 0, :, :].shape).type_as(prob)
+        prob_th = 0.1
+        prob_mask[(0 < prob[:, 0]) & (prob_th > prob[:, 0])] = 1
+        nocs = nocs * prob_mask[:, None]
+
+        # kpt2d = nocs.nonzero()
+        # import pdb
+        # pdb.set_trace()
+        # kpt3d = nocs[ten2num(kpt2d)]
+
+        # TODO(taku): consider the extraction methods from 2nd axis
+
+        K = self.K.to(self.device)
+
+        loss = 0
+        for i in range(len(nocs)):
+            kpt2d = nocs[i, 0].nonzero()
+            kpt3d = nocs[i, :, kpt2d[:, 0], kpt2d[:, 1]].permute(1, 0)
+            kpt3d = kpt3d * (params['vert_max'] -
+                             params['vert_min']) + params['vert_min']
+            kpt2d = kpt2d[:, [1, 0]].type_as(K)
+            if len(kpt2d) > 3:
+                pose_axis = self.bpnp(kpt2d[None], kpt3d, K)
+                pose_rot = angle_axis_to_rotation_matrix(pose_axis[:, :3])[0]
+                point_px3 = self.point_px3.to(self.device)
+                add_pred = point_px3 @ pose_rot.t() + pose_axis[0, 3:]
+                add_gt = point_px3 @ targets['pose'][
+                    i, 0][:3, :3].t() + targets['pose'][i, 0][:3, 3]
+
+                loss_pose = torch.mean(torch.norm(
+                    add_pred - add_gt, dim=-1))  # * 100.0 / len(nocs)
+                # import pdb
+                # pdb.set_trace()
+
+                # print(loss_pose)
+                # import pdb
+                # pdb.set_trace()
+                # loss_pose = torch.norm(pose_axis[0, 3:] -
+                #                        targets['pose'][i, 0][:3, 3])
+                # print(loss_pose)
+                self.log('train_pose_loss', loss_pose)
+                loss += loss_pose
+                # if loss_pose < 0.02:
+                #     loss += loss_pose
+        '''
+        '''
+        kpt2ds = kpt2ds[:, :, [1, 0]]
+
+        # kpt2d = nocs[0, 0].nonzero()
+        # kpt3d = nocs[0, :, kpt2d[:, 0], kpt2d[:, 1]].permute(1, 0)
+        # kpt3d = kpt3d * (params['vert_max'] - params['vert_min']) + \
+        #     params['vert_min']
+        # kpt2d = kpt2d[:, [1, 0]]
+
+        K = self.K.to(self.device)
+        kpt2d = kpt2d.type_as(K)
+        pose_axis = self.bpnp(kpt2d[None], kpt3d, K)
+        pose_rot = angle_axis_to_rotation_matrix(pose_axis[:, :3])[0]
+        point_px3 = self.point_px3.to(self.device)
+        add_pred = point_px3 @ pose_rot.t() + pose_axis[0, 3:]
+        add_gt = point_px3 @ targets['pose'][0, 0][:3, :3] + targets['pose'][
+            0, 0][:3, 3]
+        loss_pose = torch.mean(torch.norm(add_pred - add_gt, dim=-1)) * 100
+        loss += loss_pose
+        '''
         return loss
 
     def discriminator_loss(self, batch):
@@ -391,7 +499,7 @@ class GAN(pl.LightningModule):
         kpt3d = kpt3d * (params['vert_max'] - params['vert_min']) + \
             params['vert_min']
         kpt2d = kpt2d[:, [1, 0]]
-
+        '''
         xmax = torch.max(kpt3d[:, 0])
         xmin = torch.min(kpt3d[:, 0])
         ymax = torch.max(kpt3d[:, 1])
@@ -422,59 +530,111 @@ class GAN(pl.LightningModule):
             zmax_xyz[None], zmin_xyz[None]
         ]
         xyz_3d = torch.cat(xyz_list)
-        result1 = solve_pnp(ten2num(xyz_3d), ten2num(coord_2d), self.K)
-        result2 = solve_pnp(ten2num(kpt3d), ten2num(kpt2d), self.K)
-        projected_kpt = project(KPT_3D, self.K, result2)
-        image = draw_keypoints(images[0], projected_kpt[None].astype(np.int))
-
-        # nocs[:,0] -> x axis, nocs[:,1] -> y axis, nocs[:,2] -> z axis
-
-        # result = solve_pnp(
-        #     ten2num(kpt3d)[:, [2, 1, 0]], ten2num(kpt2d), self.K)
-        # result = solve_pnp(ten2num(kpt3d), ten2num(kpt2d), self.K)
-        # result = solve_pnp(ten2num(kpt3d), ten2num(kpt2d)[:, [1, 0]], self.K)
-        # result = solve_pnp(
-        #     ten2num(kpt3d)[:, [2, 1, 0]],
-        #     ten2num(kpt2d)[:, [1, 0]], self.K)
-
-        # nocs = nocs * mask[None]
-        # topk = torch.topk(prob[prob != 0], k=100, dim=0, largest=False)
+        # TODO(taku): change the below name
         # import pdb
-        # pdb.set_trace()
+        '''
 
-        # ten2num(prob)
+        K = self.K.to(self.device)
+        # coord_2d = coord_2d.type_as(K)
+        # torch.Size([1, 9, 2])
+        # torch.Size([9, 3])
+        # torch.Size([3, 3])
+        # torch.float32
+        # pose = self.bpnp(coord_2d[None], xyz_3d, K)
 
-        # idx = torch.topk(prob[prob != 0], k=100, dim=0)[1]
-        # prob[prob != 0].scatter_(0, )
+        # if len(kpt2d) > 3 and batch_idx == 0:
+        if len(kpt2d) > 3:
+            kpt2d = kpt2d.type_as(K)
+            kpt3d = kpt3d.type_as(K)
+            pose_axis = self.bpnp(kpt2d[None], kpt3d, K)
+            pose_rot = angle_axis_to_rotation_matrix(pose_axis[:, :3])[0]
 
-        # idx = torch.topk(prob[0], k=2)
-        # prob[0].scatter_(0, idx, prob.shape[2] * prob.shape[3])
+            pose_mat = torch.eye(4).to(self.device)
+            pose_mat[:3, :3] = pose_rot
+            pose_mat[:3, 3] = pose_axis[0, 3:]
+            print("pose_mat:", pose_mat)
+            print("pose_mat_target:", targets['pose'][0, 0])
 
-        if batch_idx in [0, 1, 2, 3, 4, 5]:
-            self.logger.experiment.log({
-                f"image{self.trainer.global_step}_{batch_idx}": [
-                    # wandb.Image(images[0]),
-                    wandb.Image(image),
-                    wandb.Image(targets['nocs'][0]),
-                    wandb.Image(mask),
-                    wandb.Image(nocs[0]),
-                    wandb.Image(prob[0])
-                ]
-            })
-            # self.logger.experiment.log({
-            #     f"image{self.trainer.global_step}_{batch_idx}": [
-            #         wandb.Image(images[0]),
-            #         wandb.Image(targets['nocs'][0]),
-            #         wandb.Image(nocs[0, 0]),
-            #         wandb.Image(nocs[0, 1]),
-            #         wandb.Image(nocs[0, 2])
-            #     ]
-            # })
-            print("max-min", xmax, xmin, ymax, ymin, zmax, zmin)
-            print("max-min-coord", xmax_coord, xmin_coord, ymax_coord,
-                  ymin_coord, zmax_coord, zmin_coord)
+            # pdb.set_trace()
+            projected_kpt = project(KPT_3D, ten2num(self.K),
+                                    ten2num(pose_mat[:3]))
+            image = draw_keypoints(images[0],
+                                   projected_kpt[None].astype(np.int))
+
+            pose_rot = angle_axis_to_rotation_matrix(pose_axis[:, :3])[0]
+            point_px3 = self.point_px3.to(self.device)
+            add_pred = point_px3 @ pose_rot.t() + pose_axis[0, 3:]
+            add_gt = point_px3 @ targets['pose'][
+                0, 0][:3, :3].t() + targets['pose'][0, 0][:3, 3]
+            # loss_pose = torch.mean(torch.norm(add_pred - add_gt,
+            #                                   dim=-1)) * 100.0
+            loss_pose = torch.norm(pose_axis[0, 3:] -
+                                   targets['pose'][0, 0][:3, 3])
+            print('loss_poss:', pose_axis[0, 3:], targets['pose'][0, 0][:3, 3])
+            self.log('val_pose_loss', loss_pose)
+            print('pose_loss:', loss_pose)
+
+            # if loss_pose < 100 and pose_axis[0,
+            #                                  5] > 0.4 and pose_axis[0,
+            #                                                         5] < 0.6:
+            #     self.log('val_pose_loss', loss_pose)
+            #     print('pose_loss:', loss_pose)
+
+            # result1 = solve_pnp(ten2num(xyz_3d), ten2num(coord_2d), self.K)
+            # result2 = solve_pnp(ten2num(kpt3d), ten2num(kpt2d), self.K)
             # import pdb
             # pdb.set_trace()
+            # projected_kpt = project(KPT_3D, self.K, result2)
+            # image = draw_keypoints(images[0], projected_kpt[None].astype(np.int))
+
+            # nocs[:,0] -> x axis, nocs[:,1] -> y axis, nocs[:,2] -> z axis
+
+            # result = solve_pnp(
+            #     ten2num(kpt3d)[:, [2, 1, 0]], ten2num(kpt2d), self.K)
+            # result = solve_pnp(ten2num(kpt3d), ten2num(kpt2d), self.K)
+            # result = solve_pnp(ten2num(kpt3d), ten2num(kpt2d)[:, [1, 0]], self.K)
+            # result = solve_pnp(
+            #     ten2num(kpt3d)[:, [2, 1, 0]],
+            #     ten2num(kpt2d)[:, [1, 0]], self.K)
+
+            # nocs = nocs * mask[None]
+            # topk = torch.topk(prob[prob != 0], k=100, dim=0, largest=False)
+            # import pdb
+            # pdb.set_trace()
+
+            # ten2num(prob)
+
+            # idx = torch.topk(prob[prob != 0], k=100, dim=0)[1]
+            # prob[prob != 0].scatter_(0, )
+
+            # idx = torch.topk(prob[0], k=2)
+            # prob[0].scatter_(0, idx, prob.shape[2] * prob.shape[3])
+
+            if batch_idx in [0, 1, 2, 3, 4, 5]:
+                self.logger.experiment.log({
+                    f"image{self.trainer.global_step}_{batch_idx}": [
+                        # wandb.Image(images[0]),
+                        wandb.Image(image),
+                        wandb.Image(targets['nocs'][0]),
+                        wandb.Image(mask),
+                        wandb.Image(nocs[0]),
+                        wandb.Image(prob[0])
+                    ]
+                })
+                # self.logger.experiment.log({
+                #     f"image{self.trainer.global_step}_{batch_idx}": [
+                #         wandb.Image(images[0]),
+                #         wandb.Image(targets['nocs'][0]),
+                #         wandb.Image(nocs[0, 0]),
+                #         wandb.Image(nocs[0, 1]),
+                #         wandb.Image(nocs[0, 2])
+                #     ]
+                # })
+                # print("max-min", xmax, xmin, ymax, ymin, zmax, zmin)
+                # print("max-min-coord", xmax_coord, xmin_coord, ymax_coord,
+                #       ymin_coord, zmax_coord, zmin_coord)
+                # import pdb
+                # pdb.set_trace()
 
     def generator_step(self, batch):
         g_loss = self.generator_loss(batch)
@@ -487,7 +647,8 @@ class GAN(pl.LightningModule):
         return d_loss
 
     def configure_optimizers(self):
-        lr = 0.0002
+        # lr = 0.0002
+        lr = 0.000004
         opt_g = torch.optim.Adam(self.generator.parameters(), lr=lr)
         opt_d = torch.optim.Adam(self.discriminator.parameters(), lr=lr)
         return [opt_g, opt_d], []
@@ -517,7 +678,7 @@ def run_model():
     trainer = pl.Trainer(checkpoint_callback=checkpointer,
                          logger=wandb_logger,
                          gpus='0',
-                         precision=16,
+                         precision=32,
                          max_epochs=100)
 
     dm = P2PDataModule()

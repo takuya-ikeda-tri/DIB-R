@@ -136,7 +136,7 @@ def make_camera_mat_from_mat(mat, device='cpu'):
 
 
 class P2PDataset(torch_data.Dataset):
-    def __init__(self, transform, img_num=1000, device='cuda'):
+    def __init__(self, transform, img_num=10000, device='cuda'):
         self.img_num = img_num
         self.transform = transform
 
@@ -144,13 +144,20 @@ class P2PDataset(torch_data.Dataset):
         return self.img_num
 
     def read_data(self, idx):
+        # img = np.array(
+        #     Image.open(
+        #         './pix2pose_data/rgb/{}.png'.format(idx)).convert("RGB"))
+        # nocs = np.array(
+        #     Image.open(
+        #         './pix2pose_data/nocs/{}.png'.format(idx)).convert("RGB"))
+        # pose = np.load('./pix2pose_data/pose/{}.npy'.format(idx))
         img = np.array(
-            Image.open(
-                './pix2pose_data/rgb/{}.png'.format(idx)).convert("RGB"))
+            Image.open('./pix2pose_domainA_data/rgb/{}.png'.format(
+                idx)).convert("RGB"))
         nocs = np.array(
-            Image.open(
-                './pix2pose_data/nocs/{}.png'.format(idx)).convert("RGB"))
-        pose = np.load('./pix2pose_data/pose/{}.npy'.format(idx))
+            Image.open('./pix2pose_domainA_data/nocs/{}.png'.format(
+                idx)).convert("RGB"))
+        pose = np.load('./pix2pose_domainA_data/pose/{}.npy'.format(idx))
         return img, nocs, pose
 
     def __getitem__(self, idx):
@@ -192,12 +199,18 @@ class P2PDataset(torch_data.Dataset):
         # Phong Settings
         bs = 1
         material = np.array(
-            [[0.8, 0.8, 0.8], [1.0, 1.0, 1.0], [0.4, 0.4, 0.4]],
+            [[0.7, 0.7, 0.7], [1.0, 1.0, 1.0], [0.4, 0.4, 0.4]],
             dtype=np.float32).reshape(-1, 3, 3)
+        # material = np.array([[1.0, 1.0, 1.0], [0.0, 0.0, 1.0], [0., 0., 0.]],
+        #                     dtype=np.float32).reshape(-1, 3, 3)
+
         self.tfmat = torch.from_numpy(material).repeat(bs, 1, 1).to(device)
         shininess = np.array([100], dtype=np.float32).reshape(-1, 1)
+        # shininess = np.array([0], dtype=np.float32).reshape(-1, 1)
+
         self.tfshi = torch.from_numpy(shininess).repeat(bs, 1).to(device)
         lightdirect = np.array([[1.0], [1.0], [0.5]]).astype(np.float32)
+        # lightdirect = np.array([[0.0], [0.0], [0.0]]).astype(np.float32)
         self.tflight_bx3 = torch.from_numpy(lightdirect).to(device)
 
         # length of dataset
@@ -277,18 +290,20 @@ def ten2num(input_tensor, ttype=torch.FloatTensor):
 if __name__ == "__main__":
     transform = build_transform(True)
     dataset = P2PDataset(transform)
+    render_num = 10000
+    # dataset = P2PDataset(render_num)
     # dataloader = torch_data.DataLoader(dataset, batch_size=2)
-
     dataloader = torch_data.DataLoader(dataset, batch_size=1)
-    # for i in range(1000):
-    #     image, target = next(iter(dataloader))
-    #     image = transforms.ToPILImage()(image[0].cpu()).convert("RGB")
-    #     nocs = transforms.ToPILImage()(target['nocs'][0].cpu()).convert("RGB")
-    #     pose = ten2num(target['pose'])
-    #     np.save('./pix2pose_data/pose/{}.npy'.format(i), pose)
-    #     image.save('./pix2pose_data/rgb/{}.png'.format(i))
-    #     nocs.save('./pix2pose_data/nocs/{}.png'.format(i))
-
+    '''
+    for i in range(render_num):
+        image, target = next(iter(dataloader))
+        image = transforms.ToPILImage()(image[0].cpu()).convert("RGB")
+        nocs = transforms.ToPILImage()(target['nocs'][0].cpu()).convert("RGB")
+        pose = ten2num(target['pose'])
+        np.save('./pix2pose_domainB_data/pose/{}.npy'.format(i), pose)
+        image.save('./pix2pose_domainB_data/rgb/{}.png'.format(i))
+        nocs.save('./pix2pose_domainB_data/nocs/{}.png'.format(i))
+    '''
     batch = next(iter(dataloader))
     image, target = batch
     # import pdb
